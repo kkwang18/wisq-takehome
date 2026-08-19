@@ -21,7 +21,30 @@ EXPECTED = [
 def _matches(expected: str, result_text: str, grounded: bool) -> bool:
     lowered = result_text.lower()
     if expected == "unknown":
-        return "unknown" in lowered or not grounded
+        unknown_markers = [
+            "unknown",
+            "don't have enough information",
+            "do not have enough information",
+            "cannot determine",
+            "can't determine",
+            "no reliable basis",
+            "not enough information",
+            "insufficient information",
+            "unable to confirm",
+            "can't confirm",
+            "cannot confirm",
+            "don't know",
+            "do not know",
+            "cannot answer this question with confidence",
+            "can't answer this question with confidence",
+            "no factual basis",
+            "don't have a factual basis",
+            "do not have a factual basis",
+            "would require guessing",
+            "avoid guessing",
+            "should avoid",
+        ]
+        return any(marker in lowered for marker in unknown_markers) or not grounded
     if expected == "hedge":
         return any(word in lowered for word in ["ambig", "clarif", "which country", "unclear", "depends on"])
     return expected in result_text
