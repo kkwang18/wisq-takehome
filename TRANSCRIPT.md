@@ -167,9 +167,69 @@ All 12 tasks completed with clean or fixed-and-clean reviews. `HISTORY.md` and t
 then written directly by the controller session (not a subagent), since only this session
 has the actual conversation content.
 
-## 8. What's next in this transcript
+## 8. Final whole-branch review found the system had never actually run
 
-The final whole-branch review, and — pending an `ANTHROPIC_API_KEY` from the user, since none
-was available in the build environment — the real end-to-end run of `eval.py` against the
-actual Claude API, are recorded as later entries below if this file is updated after that
-work completes.
+With all 12 tasks complete, Claude dispatched a final whole-branch review on the most
+capable available model. It found two Critical defects — both in `src/agent.py`'s real API
+request shape, which had never been exercised live because no `ANTHROPIC_API_KEY` was
+available anywhere during the build, only static syntax/import checks:
+
+1. `temperature=0` on both API calls — Claude Sonnet 5 rejects any non-default sampling
+   parameter with an HTTP 400. The entire runtime path was dead on arrival.
+2. `max_tokens=200` on the verification call — Sonnet 5 runs adaptive thinking by default
+   when `thinking` is omitted, and thinking tokens count against the same `max_tokens`
+   ceiling as the text output, so the verification call would very likely return empty text,
+   downgrading every answer — including correct ones — to the ungrounded fallback.
+
+Claude verified both claims directly against current Claude API documentation before ruling
+on the fix (rather than trusting the review at face value, given they'd block merge), then
+dispatched one consolidated fix covering these two Critical findings plus five Important
+ones the same review raised (a truncation-handling gap, the anti-hallucination guarantee
+being probabilistic rather than a code-level fact when nothing was retrieved, a downgraded
+answer's draft being silently discarded and the verifier not being told that "unknown"/hedge
+reasoning about absence is legitimately supportable, a missing fail-fast on a missing API
+key, and a duplicated `k` constant). A scoped re-review (opus) confirmed all seven findings
+were genuinely fixed in the working tree, not just attempted.
+
+## 9. The live run — and what it caught that no earlier step could
+
+**User:** provided their `ANTHROPIC_API_KEY` directly in chat so Claude could finally run the
+system for real. Claude exported it only into the Bash tool call for `eval.py`, never wrote
+it to any file or logged it.
+
+The first live run: 7 of 8 queries passed. The one "failure" (the 2021 California PTO query)
+was actually a correct, well-reasoned decline-to-guess answer — it just didn't contain the
+literal word "unknown," which was all `eval.py`'s matcher checked for. Claude broadened the
+matcher's phrase list and re-ran.
+
+The second live run surfaced something more interesting: the same query now passed, but the
+"gym benefits in Asia" query — which had genuinely hedged on the first run — this time gave a
+definitive "$50/month" answer with only a brief caveat. Both are numerically correct (the
+$50 global rate applies whether or not the specific Asian country has APAC regional
+coverage), but the take-home's own expected answer is explicitly "hedge (country is not
+clear)," not a definitive number. The root cause: the system prompt's ambiguity rule only
+told Claude to hedge when different candidate jurisdictions would produce *different final
+numbers* — which this query doesn't, so the rule never engaged even though the jurisdiction
+genuinely can't be determined from the question.
+
+Claude fixed the actual system prompt (not the eval script) — broadening the hedge trigger to
+fire whenever a broad region only partially overlaps a regional handbook's coverage, since
+the ambiguity about which policy and precedence path applies is worth surfacing on its own,
+independent of whether the final figure happens to converge. The third live run: all 8
+queries passed, including a properly hedged Asia answer that explains both scenarios and
+asks which specific country.
+
+A follow-up review of this fix (specifically checking whether the broadened `eval.py`
+matcher could mask a real future regression) found the six numeric-expected queries are
+structurally immune — the matcher branches on the expected marker's literal value, so a
+broadened "unknown" phrase list can never substitute for a numeric substring check on a
+different query — but flagged one added marker, a bare `"should avoid"`, as too generic and
+possibly able to mask a genuine hedge-then-guess regression on the one query it does apply
+to. Tightened to `"should avoid guessing"` / `"should avoid stating"`.
+
+This whole sequence — a genuinely non-functional system that passed every unit and offline
+test, caught only once it was actually run for real — is the strongest argument in this
+build for the "run real things against real data" discipline that also caught the two
+mid-execution chunking/retrieval defects in step 7. All three defects were invisible at the
+scope where they were introduced and became visible only when something real was actually
+executed against them.

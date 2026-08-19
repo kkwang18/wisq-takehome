@@ -81,11 +81,46 @@ an adjacent generic continuation paragraph out-ranked it lexically. Root-caused 
 guessed), then fixed by raising `k` from 5 to 8 — applied both in the test and in the real
 agent's search tool, since the same risk existed in the live system, not just the test.
 
+## A non-functional system that passed every test — until it actually ran
+
+No `ANTHROPIC_API_KEY` was available anywhere during the build, so `src/agent.py`'s real API
+request shape was never exercised — only checked for valid syntax and clean imports. The
+final whole-branch review (dispatched on the most capable available model, after all 12
+implementation tasks were individually complete and reviewed) found two Critical defects in
+that request shape, verified against current Claude API documentation before being fixed:
+
+1. `temperature=0` on every API call — Claude Sonnet 5 rejects any non-default sampling
+   parameter with an HTTP 400. The system could not answer a single question.
+2. `max_tokens=200` on the grounding-verification call — Sonnet 5 runs adaptive thinking by
+   default, and thinking tokens count against the same `max_tokens` ceiling as the response
+   text, so this call would very likely return empty text — downgrading every answer,
+   including fully correct ones, to the ungrounded fallback.
+
+Once the user provided a real API key and the system could finally run, a *third* class of
+defect surfaced that no unit test, offline recall test, or static review could have caught:
+the "gym benefits in Asia" query sometimes returned a definitive number instead of the hedge
+the take-home's own expected answer calls for, because the system prompt's ambiguity rule
+only triggered when different candidate jurisdictions would produce different final figures
+— which this query doesn't (the number converges to $50 regardless of the specific country).
+Fixed by broadening the hedge trigger to fire on the ambiguity itself, not just on whether it
+would change the number.
+
+All three defect classes found during this build — the two document-parsing/chunking bugs
+found by real ingestion, the retrieval-ranking near-miss found by the real-corpus recall
+suite, and these API-shape and hedging-behavior bugs found only by actually calling the real
+model — share one thing in common: every one of them was invisible at the scope where it was
+introduced, and became visible only when something real was executed against it. This is the
+practical argument for "run real things against real data" as a development discipline, not
+just a slogan: three separate defect classes, three separate layers of the system, one
+consistent method for catching all of them.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →
 subagent-driven execution (fresh implementer + fresh reviewer per task, true red/green TDD,
-YAGNI, DRY — explicit user instruction, applied throughout). Every non-trivial judgment call
-made during execution (the two chunking-heuristic fixes and the retrieval-k fix above) is
-recorded with its reasoning in the SDD ledger at
+YAGNI, DRY — explicit user instruction, applied throughout) → final whole-branch review →
+live acceptance run against the real Claude API (all 8 example queries from the take-home
+pass). Every non-trivial judgment call made during execution — the two chunking-heuristic
+fixes, the retrieval-k fix, the final review's API-shape fixes, and the live-run hedging fix
+above — is recorded with its reasoning in the SDD ledger at
 `.superpowers/sdd/2026-08-19-rag-qa-system/progress.md`.
