@@ -1,0 +1,12 @@
+- file: "fake_a.docx"
+  doc_type: global_handbook
+  jurisdictions: null
+  version_year: 2025
+  display_name: "Fake Handbook 2025"
+  active: true
+- file: "fake_b.docx"
+  doc_type: regional_handbook
+  jurisdictions: ["Testland"]
+  version_year: null
+  display_name: "Fake Regional Handbook"
+  active: false
