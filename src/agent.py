@@ -91,7 +91,7 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
                 continue
             results = index.search(
                 block.input["query"],
-                k=5,
+                k=8,
                 doc_type=block.input.get("doc_type"),
                 version_year=block.input.get("version_year"),
             )
