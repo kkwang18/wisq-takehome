@@ -1,0 +1,18 @@
+- file: "Take Home Test/Acme_Employee_Handbook_2025.docx"
+  doc_type: global_handbook
+  jurisdictions: null
+  version_year: 2025
+  display_name: "Acme Employee Handbook 2025"
+  active: true
+- file: "Take Home Test/Acme_Employee_Handbook_2026.docx"
+  doc_type: global_handbook
+  jurisdictions: null
+  version_year: 2026
+  display_name: "Acme Employee Handbook 2026"
+  active: true
+- file: "Take Home Test/APAC_Benefits_Handbook.docx"
+  doc_type: regional_handbook
+  jurisdictions: ["China", "Japan", "Taiwan"]
+  version_year: null
+  display_name: "APAC Benefits Handbook"
+  active: true
