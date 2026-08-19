@@ -20,6 +20,16 @@ def test_verify_answer_downgrades_unsupported_draft():
     )
     assert result.grounded is False
     assert "20 days is not stated" in result.text
+    assert result.rejected_draft == "PTO is 20 days."
+
+
+def test_verify_answer_hard_fails_when_nothing_retrieved():
+    calls = []
+    result = verify_answer("some draft", [], llm_call=lambda p: calls.append(p) or "SUPPORTED")
+    assert result.grounded is False
+    assert "No policy excerpts were retrieved" in result.text
+    assert result.rejected_draft is None
+    assert calls == []  # nice-to-have: llm_call should not be invoked at all
 
 
 def test_verify_answer_prompt_includes_draft_and_excerpts():

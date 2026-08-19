@@ -3,7 +3,7 @@ from __future__ import annotations
 import anthropic
 
 from src.models import Chunk
-from src.retrieval import VectorIndex
+from src.retrieval import SEARCH_K, VectorIndex
 from src.verification import VerifiedAnswer, verify_answer
 
 MODEL = "claude-sonnet-5"
@@ -73,13 +73,20 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
     while True:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=1500,
-            temperature=0,
+            max_tokens=8000,
+            # No temperature: Sonnet 5 rejects non-default sampling params (400).
+            # Grounding is enforced by the system prompt + verify_answer, not sampling.
             system=SYSTEM_PROMPT,
             tools=[SEARCH_TOOL],
             messages=messages,
         )
         messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "max_tokens":
+            return VerifiedAnswer(
+                text="Answer generation was cut off before completion; not returning a partial answer.",
+                grounded=False,
+            )
 
         if response.stop_reason != "tool_use":
             draft = "".join(block.text for block in response.content if block.type == "text")
@@ -91,7 +98,7 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
                 continue
             results = index.search(
                 block.input["query"],
-                k=8,
+                k=SEARCH_K,
                 doc_type=block.input.get("doc_type"),
                 version_year=block.input.get("version_year"),
             )
@@ -106,10 +113,12 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
         messages.append({"role": "user", "content": tool_results})
 
     def llm_call(prompt: str) -> str:
+        # No temperature: Sonnet 5 rejects non-default sampling params (400).
+        # Grounding is enforced by the system prompt + verify_answer, not sampling.
         verify_response = client.messages.create(
             model=MODEL,
-            max_tokens=200,
-            temperature=0,
+            max_tokens=1000,
+            thinking={"type": "disabled"},
             messages=[{"role": "user", "content": prompt}],
         )
         return "".join(b.text for b in verify_response.content if b.type == "text")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 
 from src.agent import answer_question
 from src.retrieval import VectorIndex
@@ -26,6 +28,9 @@ def main() -> None:
     parser.add_argument("--ask", default=None, help="Ask a single ad hoc question instead of running the example set")
     parser.add_argument("--index", default="index", help="Path to the prebuilt index directory")
     args = parser.parse_args()
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("ANTHROPIC_API_KEY is not set. Export it before running: export ANTHROPIC_API_KEY=sk-...")
 
     index = VectorIndex.load(args.index)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 from ingest import build_index
@@ -27,6 +28,9 @@ def _matches(expected: str, result_text: str, grounded: bool) -> bool:
 
 
 def main() -> None:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("ANTHROPIC_API_KEY is not set. Export it before running: export ANTHROPIC_API_KEY=sk-...")
+
     index = build_index("documents.yaml")
     failures = []
 

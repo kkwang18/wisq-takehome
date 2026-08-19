@@ -9,6 +9,7 @@ from sentence_transformers import SentenceTransformer
 from src.models import Chunk, DocMeta, ScoredChunk
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+SEARCH_K = 8
 
 
 def embed_text(chunk: Chunk) -> str:
