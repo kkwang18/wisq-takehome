@@ -42,7 +42,8 @@ def _matches(expected: str, result_text: str, grounded: bool) -> bool:
             "do not have a factual basis",
             "would require guessing",
             "avoid guessing",
-            "should avoid",
+            "should avoid guessing",
+            "should avoid stating",
         ]
         return any(marker in lowered for marker in unknown_markers) or not grounded
     if expected == "hedge":
