@@ -73,7 +73,7 @@ class VectorIndex:
             i
             for i, c in enumerate(self.chunks)
             if (doc_type is None or c.doc.doc_type == doc_type)
-            and (version_year is None or c.doc.version_year == version_year)
+            and (version_year is None or c.doc.version_year is None or c.doc.version_year == version_year)
         ]
         if not candidate_indices:
             return []

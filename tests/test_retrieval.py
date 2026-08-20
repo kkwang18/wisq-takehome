@@ -50,13 +50,25 @@ def test_search_filters_by_doc_type(model):
 def test_search_filters_by_version_year(model):
     index = VectorIndex.build(sample_chunks(), model=model)
     results = index.search("PTO entitlement", k=10, version_year=2025)
-    assert len(results) == 1
-    assert results[0].chunk.doc.version_year == 2025
+    result_years = {r.chunk.doc.version_year for r in results}
+    assert 2026 not in result_years
+    assert 2025 in result_years
+
+
+def test_search_version_year_filter_always_includes_undated_chunks(model):
+    # A chunk with version_year=None (e.g. the APAC regional handbook, which has no
+    # yearly editions) must survive every version_year filter, not just an absent one —
+    # otherwise a query that names a year alongside a regional jurisdiction (e.g. "Taiwan
+    # PTO in 2025") silently excludes the regional precedence chunk from that search call.
+    index = VectorIndex.build(sample_chunks(), model=model)
+    for year in (2025, 2026, 1999):
+        results = index.search("PTO entitlement", k=10, version_year=year)
+        assert any(r.chunk.doc.version_year is None for r in results), f"undated chunk missing for version_year={year}"
 
 
 def test_search_returns_empty_when_filters_match_nothing(model):
     index = VectorIndex.build(sample_chunks(), model=model)
-    results = index.search("PTO entitlement", k=10, version_year=1999)
+    results = index.search("PTO entitlement", k=10, doc_type="global_handbook", version_year=1999)
     assert results == []
 
 
