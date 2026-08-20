@@ -28,10 +28,14 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
 - `src/retrieval.py` — `embed_text()` (contextual header + chunk text),
   `VectorIndex` (build/save/load/search, local `sentence-transformers`, plain numpy, no
   vector DB), `SEARCH_K = 8` (shared constant, also imported by `src/agent.py`).
+  `preload_model()` starts the `SentenceTransformer` load on a background thread;
+  `_get_model()` joins it before first use — see decisions below.
 - `src/agent.py` — `answer_question()`: Claude + a `search_handbooks` tool, multi-hop
   (calls the tool as many times as needed), `MODEL = "claude-sonnet-5"`. No `temperature`
   param anywhere (rejected by this model). Main loop leaves adaptive thinking on
-  (`max_tokens=8000`); the verification call disables thinking (`max_tokens=1000`).
+  (`max_tokens=8000`); the verification call disables thinking (`max_tokens=1000`). Calls
+  `index.preload_model()` first thing, so the local embedding model loads on a background
+  thread concurrently with the first Claude round-trip instead of blocking after it.
 - `src/verification.py` — `verify_answer()`: hard-fails (`grounded=False`, no LLM call) if
   `cited_chunks` is empty; otherwise asks the LLM to check the draft against only the cited
   excerpts. `VerifiedAnswer.rejected_draft` preserves a downgraded draft (currently unread
@@ -77,6 +81,42 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   "gym benefits in Asia" converges to $50 regardless of country, and the model sometimes
   answered definitively instead of asking which country, which isn't the take-home's
   expected behavior. The rule now hedges on the ambiguity itself.
+- **Answers were tightened to 2-4 sentences, citing only the 1-2 determinative excerpts**,
+  after live runs showed multi-paragraph answers padded with disclaimers about things not
+  asked (statutory minimums, other jurisdictions) and offers to "search further" after the
+  answer was already determined. Retrieval, precedence reasoning, and `verify_answer` logic
+  were intentionally left untouched — this was a phrasing/scope change only.
+- **`preload_model()` runs on a background thread, not a system-prompt instruction to
+  batch tool calls.** Both were tried as latency fixes for the ~5-10s per-answer time.
+  Measured directly: `import sentence_transformers` costs ~3.35s and the first
+  `SentenceTransformer` instantiation costs ~2.81s — a ~6.2s one-time cost per process that,
+  before this fix, blocked on the *first* `search_handbooks` tool call rather than
+  overlapping with the Claude round-trip that precedes it. A system-prompt nudge to have
+  Claude batch multiple `search_handbooks` calls into one turn was also tried, but a live
+  ablation (0/4 failures with the nudge reverted vs. 2/4 with it in place, same query run
+  repeatedly) showed it destabilized `verify_answer` on absence-based inference questions
+  (e.g. "no regional handbook covers California, so the global default applies" — a
+  legitimate inference the verifier only sometimes accepted) — almost certainly because the
+  nudge made the model treat one batched round of searches as a stopping signal. Reverted;
+  not worth trading correctness for an unconfirmed latency win. The remaining per-question
+  latency is dominated by sequential Claude API round-trips (the multi-hop tool loop plus a
+  separate verification call), which is an intentional grounding trade-off, not a bug — see
+  the no-hallucination requirement above.
+- **Prompt caching investigated and shelved, not implemented.** `SYSTEM_PROMPT` alone is 934
+  tokens — under Sonnet 5's 1024-token cache minimum; only `SYSTEM_PROMPT` + `SEARCH_TOOL`
+  together (1501 tokens) clears it. A live timing breakdown showed 97% of per-question time
+  is Claude round-trip time dominated by thinking/generation, not input reprocessing, so
+  caching this prefix would save a small amount of cost, not the latency that motivated
+  investigating it — and `verify_answer`'s call sends no `system`/`tools` at all, so it can't
+  benefit regardless. Revisit if call volume or system-prompt size grows materially.
+- **Final answers follow a rigid three-part structure** — verdict first (the number, or the
+  closest thing to one), one short plain-language reason (the rule/version that determined
+  it), then a trailing citation tag — written like a text message from HR, not a memo. The
+  verdict-first ordering needed two rounds of live-tested strengthening (an explicit
+  WRONG/RIGHT example, then generalized from "no regional handbook" specifically to any
+  absence reasoning, including "no matching year") before it held reliably; some residual
+  variance across live runs looks like model sampling noise rather than a rule gap, since the
+  same query was clean in one run and violated in another with identical instructions.
 
 ## 4. Open questions / known gaps
 
@@ -87,19 +127,41 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   with the same shape could still rank its continuation paragraph out of the search window.
   Not currently tested for beyond the SCOPE case in `test_retrieval_recall.py`.
 - **`eval.py`'s `_matches()` is a substring/keyword heuristic on free-form model output**,
-  not a semantic check. It was tuned reactively against 3 live runs' actual phrasing (see
-  `HISTORY.md`/`TRANSCRIPT.md`) and is inherently gameable — a hedge-then-guess answer could
-  plausibly trip an "unknown" marker. Treat it as a smoke test, not a strict regression gate.
+  not a semantic check. It was tuned reactively against several live runs' actual phrasing
+  (see `HISTORY.md`/`TRANSCRIPT.md`) and is inherently gameable — a hedge-then-guess answer
+  could plausibly trip an "unknown" marker. Most recently, a correctly-hedged answer phrased
+  as "which **specific** country" slipped past the `"which country"` marker entirely (fixed
+  by adding `"specific country"`). Treat it as a smoke test, not a strict regression gate —
+  expect to keep adding markers as real phrasing varies across live runs.
 - **No iteration cap on `answer_question`'s tool-use loop.** A non-converging model could
   loop indefinitely (unbounded API cost). Deferred as low-risk for this corpus size.
 - **`VerifiedAnswer.rejected_draft` has no reader yet** — written on downgrade, never
   surfaced by `main.py`/`eval.py`. Fine as-is, but if you add a `--debug` flag or similar,
   this is where a rejected draft already lives.
+- **`verify_answer` intermittently rejects legitimate absence-based inferences** (e.g. "no
+  regional handbook names California, so the global default applies") — observed across
+  several different queries and several live runs this session, at a rate that looks like
+  real LLM verifier variance rather than a one-off. Not fixed — every occurrence so far has
+  correctly *not* produced a wrong answer (the downgrade path just falls back to "can't
+  confirm"), so it costs eval-run reliability, not correctness. Would require touching
+  `verify_answer`'s own prompt/logic to address, which no session so far has been scoped to
+  do.
+- **The Asia-gym hedge still explains what the figure would be under each branch** ("if
+  you're in one of those three countries... $50/month would win; if you're elsewhere... only
+  the global $50/month applies") — the exact hedge-undercutting pattern the verbosity
+  tightening (§3) tried to close but didn't fully. Observed live, flagged, not yet fixed.
 
 ## 5. Current status
 
 Implemented and merged to `main`: full pipeline, all 12 original plan tasks, a
 whole-branch review (2 Critical + 5 Important findings fixed), and 3 live-run-only fixes
-(2 eval.py matcher gaps, 1 hedging-behavior gap). 34 offline tests pass. `eval.py` passes
-8/8 against the real Claude API (last verified live during the build session — re-run it if
-handbook content or retrieval logic changes). Nothing currently in progress.
+(2 eval.py matcher gaps, 1 hedging-behavior gap) from the initial build. A follow-up session
+then (a) tightened answer verbosity/citation scope in `SYSTEM_PROMPT`, (b) investigated and
+partly fixed the ~5-10s per-answer latency (`preload_model()`; reverted a batch-tool-calls
+attempt after a live ablation showed it hurt correctness), (c) investigated and shelved
+prompt caching (real but small win, not worth it yet), and (d) rewrote final answers into a
+rigid three-part verdict/reason/citation structure, iterated against several live runs to
+close two verdict-ordering leaks. 35 offline tests pass. `eval.py` passes 8/8 against the
+real Claude API (last verified live at the end of that structural-rewrite work — re-run it
+if handbook content, retrieval logic, or `SYSTEM_PROMPT` changes). Nothing currently in
+progress.

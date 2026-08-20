@@ -44,10 +44,16 @@ def _matches(expected: str, result_text: str, grounded: bool) -> bool:
             "avoid guessing",
             "should avoid guessing",
             "should avoid stating",
+            "nothing on file",
+            "no policy on record",
+            "not on record",
         ]
         return any(marker in lowered for marker in unknown_markers) or not grounded
     if expected == "hedge":
-        return any(word in lowered for word in ["ambig", "clarif", "which country", "unclear", "depends on"])
+        return any(
+            word in lowered
+            for word in ["ambig", "clarif", "which country", "specific country", "unclear", "depends on"]
+        )
     return expected in result_text
 
 

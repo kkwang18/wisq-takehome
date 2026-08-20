@@ -114,6 +114,82 @@ practical argument for "run real things against real data" as a development disc
 just a slogan: three separate defect classes, three separate layers of the system, one
 consistent method for catching all of them.
 
+## A follow-up session: tightening verbosity, then chasing latency
+
+A later session picked up two separate requests, in order.
+
+**Verbosity.** Live answers were substantively correct but padded — multi-paragraph,
+citing every chunk touched during multi-hop search rather than the ones that actually
+decided the answer, and narrating caveats (statutory minimums, other jurisdictions) the
+question never raised. Fixed entirely in `SYSTEM_PROMPT` (target 2-4 sentences, cite only
+the 1-2 determinative excerpts, only raise a caveat the retrieved text makes relevant, don't
+undercut a hedge by revealing the answer under every branch). Retrieval, precedence logic,
+and `verify_answer` were deliberately left untouched. Re-verified live: 8/8.
+
+**Latency.** Asked to explain and improve the reported 5-10s per answer, Claude measured
+rather than guessed: importing `sentence_transformers` costs ~3.35s and instantiating the
+`SentenceTransformer` model costs ~2.81s — a ~6.2s one-time cost per process, which the code
+was paying *after* the first Claude round-trip (the model only loaded lazily on the first
+`search_handbooks` tool call) instead of overlapping with it. Two candidate fixes were
+proposed: preload the model on a background thread (no behavior change, pure concurrency),
+and nudge the system prompt to have Claude batch multiple `search_handbooks` calls into one
+turn instead of one at a time (fewer sequential API round-trips).
+
+The first live re-run after implementing both surfaced a real regression: the no-year
+"California PTO" query — which had passed cleanly in every prior live run this session —
+failed 1 of 4 further trials, downgraded by `verify_answer` as unsupported. The failing
+draft was making a legitimate inference from *absence* ("no regional handbook names
+California, so the global default applies"), which the verifier sometimes accepted and
+sometimes didn't. Rather than assume it was pre-existing model flakiness, Claude ran a live
+ablation: same query, same code, only the batching-hint sentence toggled. **0 of 4 failures
+with the hint reverted vs. 2 of 4 with it in place** — strong evidence the hint itself was
+the cause, most likely because it made Claude treat one batched round of searches as a
+stopping signal, which shows up as a terser, less-scaffolded draft that the verifier is
+pickier about. The hint was reverted; `preload_model()` was kept, since it doesn't touch
+answer content at all.
+
+A final confirmation run then failed differently — the "gym benefits in Asia" query hedged
+correctly ("Could you tell me which specific country you're in...") but `eval.py`'s
+`_matches()` only checked for the literal substring `"which country"`, not `"which specific
+country"`, so a properly-hedged answer slipped past every marker. This is the same class of
+matcher brittleness documented from the original build (see below); fixed by adding
+`"specific country"` to the hedge marker list. A subsequent live run: 8/8.
+
+**Takeaway carried forward:** the same "run real things against real data" discipline that
+caught defects during the original build caught a real one here too — a plausible-sounding
+latency fix (batch the tool calls) turned out to measurably destabilize a correctness
+guarantee, and the only way that surfaced was running the actual eval against the actual
+API repeatedly, not reasoning about the prompt change in the abstract.
+
+**Prompt caching, investigated and shelved.** Asked whether prompt caching was worth adding,
+Claude measured rather than estimated: a live timing breakdown of one multi-hop question
+(via temporary instrumentation in `answer_question()`, reverted after) showed 97% of the
+~9.5s call time is Claude API round-trip time dominated by thinking/generation, and the real
+`count_tokens` endpoint showed the static `SYSTEM_PROMPT` alone (934 tokens) falls *under*
+Sonnet 5's 1024-token cache minimum — only the system prompt plus the `search_handbooks`
+tool definition together (1501 tokens) clears it. Verdict: caching would save a real but
+small amount of cost, not the latency that motivated the original investigation, since the
+cacheable prefix is small relative to total call time and `verify_answer`'s call sends no
+system/tools at all. Shelved for now. (Full breakdown: `TRANSCRIPT.md` § 11.)
+
+**A rigid three-part answer structure, iterated live.** Asked to enforce a fixed
+"text-from-HR" shape — verdict, then one reason, then a trailing citation tag, no
+exceptions — Claude rewrote `SYSTEM_PROMPT` and, having learned from the batching-hint
+incident above that a prompt-phrasing change can look right and still misbehave live,
+re-verified against `eval.py` after every revision instead of once. Three real gaps surfaced
+and were fixed in turn: reasoning leaking before the verdict on "no regional handbook
+covers X" answers (fixed with an explicit example), the same leak recurring for "no
+matching year" answers (fixed by generalizing the rule to absence in general, not just the
+regional-handbook case), and an `eval.py` matcher gap for the phrase "nothing on file" (same
+recurring matcher-brittleness class as before). Final live run: 8/8, with verdict-first
+holding in 7 of 8 responses — the one residual violation had been clean on the identical
+query in a prior run, which reads as model sampling variance rather than a rule gap, and
+Claude stopped there rather than chase a variance floor no `temperature` control can reduce
+on this model. Also surfaced, incidentally: the Asia-gym hedge still explains both branches'
+outcomes, the same undercutting pattern the verbosity-tightening task above tried to close —
+flagged, not fixed, since it's outside this task's scope. (Full detail: `TRANSCRIPT.md` §
+12.)
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

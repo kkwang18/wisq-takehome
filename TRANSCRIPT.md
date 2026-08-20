@@ -233,3 +233,191 @@ build for the "run real things against real data" discipline that also caught th
 mid-execution chunking/retrieval defects in step 7. All three defects were invisible at the
 scope where they were introduced and became visible only when something real was actually
 executed against them.
+
+## 10. A follow-up session — tightening verbosity, then a latency investigation that found a real bug
+
+A later session opened with: "Lets pick up from our last session. Answers are substantively
+correct (8/8 verdicts match), but too verbose — multi-paragraph, padded with disclaimers
+about things not asked (statutory minimums not in retrieved text, offers to 'search further'
+when already determined)," followed by four numbered requirements: lead with the verdict in
+2-4 sentences; cite only the 1-2 chunks that actually determined the answer; drop speculative
+caveats the retrieved text doesn't make relevant; only hedge on genuine ambiguity, without
+revealing the answer under every branch. It explicitly asked to leave retrieval, precedence
+reasoning, and `verify_answer` untouched.
+
+Claude rewrote `SYSTEM_PROMPT`'s closing section to encode exactly those four rules, ran the
+offline suite (34 passed, unaffected since this only touches prompt text), and asked to run
+`eval.py` live to confirm. No `ANTHROPIC_API_KEY` was set in the shell; the user chose to
+skip live verification for that turn rather than export one immediately.
+
+**User:** "This is looking better now, lets focus on performance. The answer generation is
+taking 5-10 seconds. Can we first understand why, what the bottlenecks are and how we can
+improve?" Claude invoked the `systematic-debugging` skill rather than guessing, and measured
+the local embedding stack directly instead of theorizing: `import sentence_transformers`
+costs ~3.35s, instantiating `SentenceTransformer` costs ~2.81s, and a warm `search()` call
+after that is ~0.03s (71 chunks, negligible). That ~6.2s is a one-time per-process cost, but
+it was landing *inside* `answer_question()`'s timing because the model only loaded lazily on
+the first `search_handbooks` tool call — after, not overlapping with, the first Claude
+round-trip. Claude flagged the other likely contributor it couldn't measure without a key —
+sequential Claude API round-trips (the multi-hop tool loop plus a separate `verify_answer`
+call) — and asked which invocation pattern the user was timing (repeated `--ask`, one batch
+run, or unsure), since that determines which bottleneck dominates. **User:** "Not sure/both
+matter." Claude then proposed two "safe" fixes (background-thread model preload; a
+system-prompt nudge to batch multiple `search_handbooks` calls in one turn) and two riskier
+ones it flagged but didn't recommend without explicit buy-in (dropping the separate
+verification call; disabling adaptive thinking on the main loop) — both would trade against
+grounding/quality decisions made explicitly earlier in the project.
+
+**User** then ran `! export ANTHROPIC_API_KEY=...` directly in the terminal to supply a real
+key, and said: "Lets start with the two safe wins, I have exported the key" — followed
+immediately by "Can you record the whole coding agent history in this chat as well" (the
+request behind this section and the corresponding `HISTORY.md` entry).
+
+Claude first closed out the pending verification from the verbosity-tightening task: a live
+`eval.py` run against the tightened prompt passed 8/8. It then implemented the two wins via
+TDD — a failing test for `VectorIndex.preload_model()` first (red), then the implementation:
+a background thread loads the model, `_get_model()` joins it before use — plus the
+system-prompt batching nudge. Offline suite: 35/35 (34 + the new preload test).
+
+A live re-run of `eval.py` with both changes in place failed 1/8: the no-year "California
+PTO" query — which had passed cleanly in every prior live run — was downgraded by
+`verify_answer` as unsupported. Claude re-ran the same query 3 more times in isolation and
+saw it fail 1 of 3, confirming this was a real, reproducible-at-meaningful-rate issue, not a
+one-off. Rather than assume the cause, Claude reported the finding plainly and asked whether
+to spend more of the user's API budget on an ablation to isolate which of today's changes (if
+either) was responsible, versus parking it as a possibly-pre-existing gap. **User:** "Run the
+ablation."
+
+Claude temporarily reverted only the batching-hint sentence (keeping `preload_model()`, which
+doesn't touch answer content) and re-ran the same query 4 times: **0 failures**, versus 2
+failures across the 4 prior trials with the hint in place. The mechanism: the failing drafts
+were making a legitimate inference from absence ("no regional handbook names California, so
+the global default applies") that the verifier inconsistently accepted — and the batching
+hint most likely made Claude treat one batched round of searches as a stopping signal,
+producing a terser, less-scaffolded draft the verifier was pickier about. Claude reverted the
+hint permanently, kept `preload_model()`, reconfirmed the offline suite (still 35/35, since
+none of this is offline-testable), and ran a final live `eval.py` pass to confirm.
+
+That run failed differently: the "gym benefits in Asia" query hedged correctly ("Could you
+tell me which specific country you're in...") but `eval.py`'s `_matches()` only checked the
+literal substring `"which country"`, missing `"which specific country"` — the same class of
+matcher brittleness documented from the original build, now caught on a phrasing variant one
+word longer than before. Claude added `"specific country"` to the hedge marker list. The next
+live run: 8/8.
+
+Net changes kept: the verbosity-tightened `SYSTEM_PROMPT`, `VectorIndex.preload_model()` (a
+background-thread model load with a TDD-covered test), and one more `eval.py` matcher
+broadening. The batching-hint latency idea was tried, measured, and discarded — a real
+example of a plausible-sounding fix that a live ablation showed was actively harmful, caught
+only because the same "run real things against real data" discipline from the original build
+was applied again rather than trusting the offline suite (which couldn't see any of this)
+or a single passing live run (which had already happened twice before the flakiness showed
+up on the third and fourth samples).
+
+Before wrapping up, the user asked to resolve a `NotOpenSSLWarning` from `urllib3` that
+appeared on every run. Claude traced it to `urllib3` v2 (a transitive dependency via
+`requests` ← `huggingface_hub`) warning whenever Python's `ssl` module is built against
+LibreSSL instead of OpenSSL — the case for this venv's macOS system-framework Python. Fixed
+by pinning `urllib3<2` in `requirements.txt`. The user then reported still seeing the
+warning; the actual cause was that their `python3 main.py` invocation used the *system*
+Python's separate `~/Library/Python/3.9/lib/python/site-packages` install, not `.venv` —
+the fix had only been applied inside `.venv`. Claude applied the same pin
+(`pip install --user "urllib3<2"`) to that environment too and confirmed both were clean.
+
+## 11. Investigating prompt caching before implementing it
+
+**User:** "Okay. We have a great start, lets look into improvement areas. I was thinking
+about implementing prompt caching. Can you run these tests to confirm if it's beneficial in
+this system?" — followed, mid-turn while Claude was reading the `claude-api` skill, by a
+precise two-part spec: (1) add timing around `agent.py` separating time in
+`VectorIndex.search()` from each Claude API call type (search-decision, draft, verify), run
+one representative multi-hop question, and report the breakdown; (2) check the static system
+prompt's real token count against Sonnet 5's cache minimum, since the API's own
+`count_tokens` endpoint exists for exactly this and guessing wasn't the point.
+
+Claude added temporary `time.perf_counter()` instrumentation to `answer_question()`, ran it
+live against "What is the gym related benefits for a employee living in Asia?" (a genuine
+multi-hop case — the model issued two `search_handbooks` calls in one turn), and got: 3.49s
+search-decision call, 4.30s draft call, 1.50s verify call, 0.25s total for both local
+`index.search()` calls combined. Separately, `client.messages.count_tokens` showed
+`SYSTEM_PROMPT` alone at 934 tokens — under Sonnet 5's 1024-token cache minimum — and
+`SYSTEM_PROMPT` + the `search_handbooks` tool definition together at 1501 tokens, which does
+clear it (render order is `tools → system → messages`, so a breakpoint on the system block
+caches both).
+
+While reverting the timing instrumentation, Claude ran `git checkout -- src/agent.py` —
+which discarded the *entire* file's uncommitted changes, not just the instrumentation,
+wiping out the verbosity-tightened `SYSTEM_PROMPT` and the `preload_model()` call from
+earlier in the session (nothing had been committed yet). The harness's post-tool-use file
+watcher surfaced the file's actual on-disk content in the next turn, Claude caught the
+discrepancy immediately, disclosed the mistake plainly rather than silently re-applying a
+fix, and reconstructed both lost changes from the conversation's own edit history —
+confirmed correct via `git diff` matching the pre-mistake state exactly, and the offline
+suite passing 35/35 again.
+
+Claude's synthesis: 97% of the ~9.5s multi-hop call time is Claude API round-trip time, and
+that time is dominated by thinking/generation, not input reprocessing — so even a cache hit
+on the 1501-token prefix wouldn't move the number that motivated the original latency
+investigation. The `verify_answer` call (16% of the total) sends no `system`/`tools` at all
+and embeds a per-question draft, so it's structurally uncacheable regardless. Net: a real
+but small cost lever (fractions of a cent per call at this volume), not a latency fix. Asked
+how to proceed, the user asked to see the full reasoning before deciding, then: **"Yes, lets
+skip this for now."**
+
+**User:** "btw can you ensure the transcript is being regularly updated after each prompt?"
+— this section, and the standing practice going forward, are the answer.
+
+## 12. A rigid, texting-style answer structure
+
+**User:** "Okay lets consider the answers this system gives, right now some answers lead
+with the number, others lead with the reasoning. Lets enforce a rigid structure for each
+answer, written as if HR is texting the employee. 1. answer first, the number or verdict.
+2. Short supporting sentence explaining why. (the precedence rule or version that determined
+it) 3. Citation as a light trailing tag. This change should be scoped to the phrasing and
+structure not the logic."
+
+Claude rewrote `SYSTEM_PROMPT`'s final-answer section into an explicit three-part template
+matching the spec, then verified live rather than trusting the wording alone — the earlier
+sessions' pattern of prompt changes producing real, only-visible-live regressions held again
+here. The offline suite caught one thing immediately: the new text said "citation" but the
+existing `test_agent.py` assertion checked for the substring `"cite"`, which "citation"
+doesn't contain — fixed by rewording to "Cite only the excerpt(s)...".
+
+The first live `eval.py` run (8/7 answerable, 1 failure) showed the real problem: 3 of 8
+answers opened with a reasoning sentence *before* the verdict — e.g. "No regional handbook
+for California/US exists... [then] **14 days of PTO...**" — directly violating "verdict
+first, no preamble." Separately, the 2021 "unknown" query correctly said "Nothing on file
+for that year" but failed `eval.py`'s matcher, which didn't have that phrase — the same
+recurring matcher-brittleness class as before; fixed by adding `"nothing on file"` and
+similar markers.
+
+Claude strengthened the verdict-first instruction (explicit "very first words" language,
+redirecting the absence-reasoning into part 2) and re-ran live: down to 2 of 7 violations,
+both still the "no regional handbook covers X" pattern. Rather than keep restating the
+abstract rule, Claude added a concrete WRONG/RIGHT example matching that exact failure
+shape. Next live run: 0 structural violations in the 5 answerable cases, but a new
+observation — the same pre-existing `verify_answer` flakiness on absence-based inference
+claims (previously found and characterized in § 10, on a different query) recurred twice,
+this time on "California gym" and the Asia hedge query. Claude did not re-open that
+investigation — it's a known, separate, pre-existing gap, not something today's phrasing
+change caused, and today's change was explicitly scoped to phrasing/structure only.
+
+One more residual pattern surfaced: the 2021 "unknown" case still opened with "No results
+found for a 2021 version..." before its own verdict line — the same anti-pattern, just for
+a missing-year absence rather than a missing-region one. Claude generalized the rule (from
+"no regional handbook" specifically to "any absence — no regional handbook, no matching
+year, nothing else applies") and added a second WRONG/RIGHT example for the missing-year
+case. A fourth live run: **8/8 passed**, with verdict-first holding in 7 of 8 responses —
+the one remaining violation (California, no year specified) had been clean in the *previous*
+run on the same query with identical instructions, which reads as genuine sampling variance
+rather than a rule gap; Claude stopped iterating on wording at that point rather than chase
+further compliance the model's own stochasticity limits, especially given `temperature`
+cannot be set on this model to reduce it (see `CLAUDE.md` § 3).
+
+Reading the final run closely also surfaced, unprompted, a live instance of an *older* known
+gap: the Asia-gym hedge answer still explained what the figure would be under both branches
+("...the global handbook's $50/month benefit would actually win out... if you're elsewhere...
+only the global $50/month benefit applies") — the exact hedge-undercutting pattern § 10's
+verbosity-tightening task tried to close ("do not also reveal what the answer would be under
+each possible resolution") but evidently didn't fully. Flagged to the user, not fixed — out
+of scope for a task that was already about a different part of the answer.

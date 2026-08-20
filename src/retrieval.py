@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,7 @@ class VectorIndex:
         self.chunks = chunks
         self.embeddings = embeddings
         self._model = model
+        self._model_load_thread: threading.Thread | None = None
 
     @classmethod
     def build(cls, chunks: list[Chunk], model: SentenceTransformer | None = None) -> "VectorIndex":
@@ -42,7 +44,20 @@ class VectorIndex:
         vectors = np.array(model.encode(texts, normalize_embeddings=True))
         return cls(chunks, vectors, model=model)
 
+    def preload_model(self) -> None:
+        """Start loading the embedding model on a background thread, so the load
+        (~3s of import + instantiation) overlaps with whatever the caller does next
+        (e.g. the first Claude API round-trip) instead of blocking the first search()."""
+        if self._model is not None or self._model_load_thread is not None:
+            return
+        thread = threading.Thread(target=lambda: setattr(self, "_model", SentenceTransformer(MODEL_NAME)))
+        thread.start()
+        self._model_load_thread = thread
+
     def _get_model(self) -> SentenceTransformer:
+        if self._model_load_thread is not None:
+            self._model_load_thread.join()
+            self._model_load_thread = None
         if self._model is None:
             self._model = SentenceTransformer(MODEL_NAME)
         return self._model

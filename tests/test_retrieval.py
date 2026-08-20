@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from sentence_transformers import SentenceTransformer
 
@@ -57,6 +58,18 @@ def test_search_returns_empty_when_filters_match_nothing(model):
     index = VectorIndex.build(sample_chunks(), model=model)
     results = index.search("PTO entitlement", k=10, version_year=1999)
     assert results == []
+
+
+def test_preload_model_runs_in_background_and_get_model_reuses_it():
+    index = VectorIndex(sample_chunks(), np.zeros((4, 384)))
+    assert index._model is None
+
+    index.preload_model()
+    index.preload_model()  # idempotent: must not start a second background load
+
+    loaded = index._get_model()
+    assert isinstance(loaded, SentenceTransformer)
+    assert index._get_model() is loaded  # subsequent calls reuse the same instance
 
 
 def test_save_and_load_round_trip(tmp_path, model):

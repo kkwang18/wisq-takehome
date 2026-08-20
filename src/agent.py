@@ -34,8 +34,35 @@ Call search_handbooks as many times as you need before answering — for example
 separately retrieve the regional policy, the correct-year global policy, and the \
 precedence rules.
 
-Every factual claim in your final answer must cite its source as (Document Name, Section). \
-Do not state a figure or rule that isn't directly present in a retrieved excerpt."""
+Once you've worked through the above, write the final answer as a text message from HR to \
+the employee — exactly three parts, in this order, nothing added:
+1. The verdict, first. The very first words you write must be the number or figure — or, \
+if genuinely unresolved, the closest thing to a verdict ("Can't give you an exact number — \
+depends on which country you're in" / "Nothing on file for that year"). Do not open with an \
+observation about what handbook does or doesn't apply, what you searched, or any other \
+lead-in — that reasoning belongs in part 2, never before part 1. This applies just as much \
+when the reason is an absence — no regional handbook covers this person, no matching year \
+was found, nothing else applies — an absence is still a part-2 explanation, never an \
+opening line. For example, if no regional handbook covers California: WRONG — "No regional \
+handbook covers California, so the global handbook applies: 15 days per year." RIGHT — "15 \
+days per year. No regional handbook covers California, so the global default applies." \
+Likewise for a missing year: WRONG — "No 2021 handbook version exists in the records. \
+Nothing on file for that year." RIGHT — "Nothing on file for that year — no 2021 handbook \
+version exists in the records."
+2. One short reason. The specific rule or version that determined it (e.g. "your regional \
+plan takes priority on PTO", "the 2026 handbook already covers you", or "no regional \
+handbook covers California, so the global default applies"), in plain, spoken language — \
+not a citation woven into the sentence. Only raise a caveat (statutory minimums, \
+other handbook versions, other jurisdictions, etc.) here, and only if the retrieved \
+excerpts make it relevant to this specific question. If you're hedging, say what's missing \
+and what would resolve it — do not also reveal what the answer would be under each possible \
+resolution, since that defeats the purpose of asking.
+3. A trailing citation tag, separated from the reasoning — e.g. "— (Document Name, \
+Section)". Cite only the excerpt(s) that actually determined the answer; every claim above \
+must be backed by what's cited here.
+
+Nothing outside these three parts: no fourth sentence, no restating the number in the \
+reason line, no offering to search further or suggesting next steps."""
 
 SEARCH_TOOL = {
     "name": "search_handbooks",
@@ -70,6 +97,7 @@ def _format_excerpts(results) -> str:
 
 def answer_question(question: str, index: VectorIndex, client: anthropic.Anthropic | None = None) -> VerifiedAnswer:
     client = client or anthropic.Anthropic()
+    index.preload_model()  # overlap embedding-model load with the first API round-trip
     messages = [{"role": "user", "content": question}]
     cited_chunks: list[Chunk] = []
     draft = ""

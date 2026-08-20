@@ -3,3 +3,4 @@ sentence-transformers>=3.0.0
 numpy>=1.26.0
 pyyaml>=6.0
 pytest>=8.0.0
+urllib3<2  # >=2 warns (NotOpenSSLWarning) when Python's ssl module is built against LibreSSL, as on macOS system Python
