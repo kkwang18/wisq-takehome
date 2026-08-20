@@ -805,3 +805,79 @@ table, and the prototype's methodology and exact results, explicitly framed as
 ready-to-implement without re-investigation once triggered by real corpus growth — the same
 shape as the LLM-assisted-chunking ticket, and for the same underlying reason: real,
 verified capability, not yet justified by this corpus's current size.
+
+## 18. Project layout cleanup — docs consolidated, eval scripts separated from the product CLI
+
+**User:** "Great, can we do some general cleanup of the project. We have a docs dir but then
+transcript.md and others are roaming outside. Can you logically organize the directories and
+code in a way another eng can easily decipher the files." Claude surveyed the full scope
+before touching anything: checked which root-level files are load-bearing by convention
+(`CLAUDE.md` — Claude Code's own auto-discovery requires it at repo root; `README.md` —
+universal git-hosting convention) versus which were genuinely misplaced, and checked the
+`Take Home Test/` directory's contents (dated well before the project's own history) to
+confirm it's the original delivered assignment materials, not something to reorganize.
+Grepped for every cross-reference to `HISTORY.md`/`TRANSCRIPT.md` across the repo (25
+occurrences, 11 files) before moving anything, and drew a deliberate line: update *live*
+documentation (`README.md`, `CLAUDE.md`, the docs/backlog tickets' actionable instructions,
+and the two files' own self-references) but leave `docs/superpowers/plans/*.md` and
+`docs/superpowers/specs/*.md` untouched, since those are point-in-time planning artifacts —
+a faithful record of what was written at the time, the same principle already applied to
+`TRANSCRIPT.md` itself. Moved both files into `docs/` via `git mv` (preserving history) and
+fixed every live reference. Along the way, auditing surfaced two real, unrelated staleness
+bugs: `HISTORY.md` pointed at a `.superpowers/sdd/.../progress.md` path confirmed via
+`git log` to have never been tracked — a fresh clone would never have had it — and a
+`SEARCH_K = 8` decision bullet in `CLAUDE.md` that was stale (raised to 10 by the morning's
+chunking fix, but the bullet still described 8 as current). Fixed both.
+
+**User** (mid-turn, while Claude was still working): "Can you logically group the .py files
+as well." Claude identified the real ambiguity at the project root: `ingest.py`/`main.py`
+(the actual product CLI) sat alongside `eval.py`/`edge_cases.py` (live-API QA tooling with a
+very different purpose — spend real money, check correctness, not typical usage) looking
+like similar entry points. Created `evals/` as a proper package (`__init__.py`, matching
+`src/`'s and `tests/`'s existing convention) and moved both scripts in via `git mv` — a pure
+rename, zero content changes (confirmed via `git diff`). Anticipated and tested the real
+risk before trusting it: moving a script into a subdirectory changes what lands on
+`sys.path[0]` when run directly, which would break `from ingest import build_index` — instead
+of guessing, verified `python -m evals.eval` (module invocation, puts the *working directory*
+on `sys.path`, not the script's own directory) resolves correctly via the free "no API key
+set" exit path, at zero live-API cost, before updating any documentation to point at the new
+command. Updated `README.md`, `CLAUDE.md`, and the two backlog tickets' actionable regression
+commands; left informal short-name mentions of "eval.py" in prose, and every narrative
+mention inside `docs/HISTORY.md`/`docs/TRANSCRIPT.md` of a *literal past command*, untouched
+— the same historical-record principle as before, since those commands were genuinely typed
+that way at the time. 43/43 offline suite, both moved scripts confirmed via the same
+zero-cost import check, one commit for the whole reorganization.
+
+## 19. A live false-positive report leads to compound test assertions and a new test-of-tests
+
+**User** pasted a real live response to `edge_cases.py`'s `NEGATIVE_SPACE` case "Since Taiwan
+employees get unlimited PTO, how many sick days do they get?" (expected marker: `"12"`) and
+asked directly: "this isn't necessarily correct, the response our system gave is accurate,
+how can we ensure our test suite is not sending false positives/negatives." Rather than take
+the claim at face value, Claude ran the actual `_matches()` function against the pasted
+response text to see precisely what was happening, rather than reason about it abstractly —
+confirmed the test passed, but for the wrong reason: "12" appeared only because the response
+correctly restated the true PTO figure while correcting the false premise, and the
+*separate*, genuinely-different sick-days sub-question was never actually checked by the
+marker at all. Also checked, before proposing a fix, whether a naive tightening (requiring an
+"unknown"-class marker too) would have worked — and found it wouldn't have: the real
+response's phrasing ("No fixed number of sick days on file") wasn't caught by any existing
+marker either, the same recurring class of gap already documented in `CLAUDE.md` § 4, found
+again by testing rather than assuming the fix would work.
+
+Fixed via TDD: extended `_matches()` to accept a list/tuple `expected` (AND semantics, so a
+compound question can require multiple independent conditions), added the missing marker,
+and updated the specific case to `["12", "unknown"]`. Before writing the fix, wrote
+`tests/test_edge_cases_matching.py` — offline, zero-cost, real regression coverage of the
+matching *harness itself*, not just the system under test, including a constructed
+adversarial case (a hallucinated "sick days: 12" response that would have passed the old
+single-marker test identically) to prove the fix actually discriminates correctly, not just
+that it passes the one real example. Then scanned the rest of the 44-case + 8-case suite
+heuristically for the same compound-question shape, found one other candidate (the
+California `$75` gym case), and judged it genuinely different in kind — a single corrected
+figure to verify, not an independent second sub-question — rather than reflexively applying
+the same fix everywhere. Updated `CLAUDE.md`'s existing duplicated-marker-lists gap to note
+the two `_matches()` copies have now functionally diverged (only `edge_cases.py`'s supports
+compound assertions), and added a general, reusable principle for writing future
+negative-space cases: compound only when the question asks two genuinely independent things,
+not by default.

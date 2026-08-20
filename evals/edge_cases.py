@@ -21,7 +21,11 @@ ENTITY_RESOLUTION = [
 
 # Negative space: false premises and never-mentioned benefits.
 NEGATIVE_SPACE = [
-    ("Since Taiwan employees get unlimited PTO, how many sick days do they get?", "12"),
+    # Compound: correcting the false "unlimited" premise (must state the true figure, 12)
+    # and separately declining the sick-days sub-question (must not fabricate a number) are
+    # two independent claims — a single "12" marker would pass even if sick days were
+    # wrongly hallucinated as 12 too, since the PTO correction alone satisfies it.
+    ("Since Taiwan employees get unlimited PTO, how many sick days do they get?", ["12", "unknown"]),
     ("Why is the California-specific gym reimbursement only $75/month?", "50"),
     ("What is Acme's signing bonus policy?", "unknown"),
     ("How many days of parental leave does a Japan-based employee get?", "unknown"),
@@ -78,7 +82,13 @@ CATEGORIES = {
 }
 
 
-def _matches(expected: str, result_text: str, grounded: bool) -> bool:
+def _matches(expected, result_text: str, grounded: bool) -> bool:
+    # A list/tuple of conditions means ALL must hold — for a compound question that mixes a
+    # false premise with a genuinely-unanswerable sub-question, a single marker can't tell a
+    # correct answer from one that got the premise right by luck while hallucinating the
+    # other half (see tests/test_edge_cases_matching.py for the live case that exposed this).
+    if isinstance(expected, (list, tuple)):
+        return all(_matches(e, result_text, grounded) for e in expected)
     lowered = result_text.lower()
     if expected == "unknown":
         unknown_markers = [
@@ -90,6 +100,7 @@ def _matches(expected: str, result_text: str, grounded: bool) -> bool:
             "don't have a factual basis", "do not have a factual basis", "would require guessing",
             "avoid guessing", "should avoid guessing", "should avoid stating",
             "nothing on file", "no policy on record", "not on record",
+            "no fixed number",
         ]
         return any(marker in lowered for marker in unknown_markers) or not grounded
     if expected == "hedge":

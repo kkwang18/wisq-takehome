@@ -298,6 +298,31 @@ Documented as a fourth backlog ticket rather than implemented, with the full des
 so a future session facing real corpus growth can build from a finished design instead of
 re-deriving it.
 
+## A project layout cleanup, and a live false positive that led to compound test assertions
+
+Asked to organize the project ("we have a docs dir but transcript.md and others are roaming
+outside"), Claude surveyed every cross-reference before moving anything (25 occurrences
+across 11 files), moved `HISTORY.md`/`TRANSCRIPT.md` into `docs/` and `eval.py`/`edge_cases.py`
+into a new `evals/` package (separated from the `main.py`/`ingest.py` product CLI), and fixed
+every live reference — while deliberately leaving historical/planning artifacts and past-tense
+narrative mentions of literal commands untouched, the same principle applied throughout this
+project's own documentation practice. Verified the riskiest part (would the moved scripts'
+imports still resolve?) before trusting it, at zero live cost. Found and fixed two unrelated
+staleness bugs along the way: a dangling reference to a path that was never actually tracked
+in git, and a stale `SEARCH_K` value in `CLAUDE.md`.
+
+Then a user-reported live response exposed a real weakness in the test suite itself: a
+`edge_cases.py` case expecting the substring `"12"` passed against a *correct* answer, but for
+the wrong reason — the marker only matched because an unrelated part of the answer happened to
+restate the number, while the actual question being tested (a genuinely separate, unrelated
+sick-days sub-question) was never checked at all. Confirmed precisely by running `_matches()`
+against the real pasted response rather than reasoning abstractly, then fixed via TDD: extended
+the matcher to support compound (AND) assertions, added a missing marker (found the same way —
+by checking, not assuming, that a naive fix would have worked), and — since the matching logic
+itself had never had test coverage — added real, offline, zero-cost tests for the test harness's
+own correctness, including an adversarial case proving the fix actually discriminates a
+hallucinated answer from a correct one, not just that it passes the one example in hand.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

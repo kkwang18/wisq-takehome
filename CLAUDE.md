@@ -67,7 +67,11 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   actual queries — this is the regression guard for chunking/embedding/`k` changes.
   `test_retrieval_entity_resolution.py` does the same against lexically-varied queries
   (typos, casing, abbreviations, alternate country names) — the offline half of the
-  `edge_cases.py` production-readiness suite.
+  `edge_cases.py` production-readiness suite. `test_edge_cases_matching.py` tests
+  `evals/edge_cases.py`'s own `_matches()` function directly — the one place in the test
+  suite that gets automated, zero-cost regression coverage of the *test harness's own
+  correctness*, not just the system under test; add a case here whenever `_matches()`
+  changes, the same way any other logic change gets a test.
 - `docs/backlog/` — deferred, fully-investigated tasks a future session can pick up cold:
   root cause, suggested fix, risk, and test plan already written up, not just a one-line
   TODO. Check here before starting new work in case it's already been diagnosed.
@@ -230,12 +234,29 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   is unchanged and could still surface via other absence-inference shapes; don't treat this
   ticket as resolved.
 - **`_matches()`'s marker lists (`unknown_markers`, hedge words) are duplicated verbatim
-  between `eval.py` and `edge_cases.py`.** Inherited from how each was written, not a
-  deliberate choice. Low risk today, but both files' marker lists have already needed
-  reactive tuning against real live-run phrasing (see the gap above and `docs/HISTORY.md`) — a
-  future fix to one copy that doesn't propagate to the other would silently reintroduce a
-  known class of gap. Worth extracting into a shared module before a third live-tuning round
-  happens; not urgent enough to block anything today.
+  between `evals/eval.py` and `evals/edge_cases.py`.** Inherited from how each was written,
+  not a deliberate choice. Both files' marker lists have already needed reactive tuning
+  against real live-run phrasing (see the gap above and `docs/HISTORY.md`) — a future fix to
+  one copy that doesn't propagate to the other would silently reintroduce a known class of
+  gap. The two copies have now also **functionally diverged**, not just duplicated: only
+  `edge_cases.py`'s `_matches()` supports a list/tuple `expected` for compound (AND)
+  assertions (added to fix a real false-positive risk — see
+  `tests/test_edge_cases_matching.py` and the case comment on `NEGATIVE_SPACE`'s Taiwan
+  sick-days question), `eval.py`'s does not. Worth extracting into a shared module before a
+  third live-tuning round happens, or before `eval.py` needs a compound assertion of its own
+  and someone has to remember to port the feature, not just the marker list; not urgent
+  enough to block anything today.
+- **Writing a good `_matches()` test case: check whether the question asks more than one
+  independent thing.** A single substring/keyword marker only verifies one claim. A question
+  bundling two unrelated claims (e.g. "since \[false premise\], what is \[a genuinely
+  different, unrelated fact\]?") needs a compound `[marker, marker]` assertion, or the test
+  can pass for the wrong reason — confirmed live: a single `"12"` marker on the Taiwan
+  sick-days question passed only because the *unrelated* PTO-premise correction happened to
+  restate "12," while the actual sick-days answer was never checked at all, so a
+  hallucinated "sick days: 12" would have passed identically. A question correcting one false
+  figure with no separate sub-question (e.g. the California gym `$75` case) doesn't have this
+  risk — there's only one fact to verify — so don't reflexively compound every negative-space
+  case, only ones that actually ask two independent things.
 - **The Asia-gym hedge still explains what the figure would be under each branch** ("if
   you're in one of those three countries... $50/month would win; if you're elsewhere... only
   the global $50/month applies") — the exact hedge-undercutting pattern the verbosity
