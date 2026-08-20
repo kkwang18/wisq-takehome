@@ -323,6 +323,38 @@ itself had never had test coverage — added real, offline, zero-cost tests for 
 own correctness, including an adversarial case proving the fix actually discriminates a
 hallucinated answer from a correct one, not just that it passes the one example in hand.
 
+## A live fabrication, caught by the safety net, root-caused, and closed with a restrictive fix
+
+A user-reported live run showed `verify_answer` rejecting a draft that had, in its own text,
+claimed the APAC Benefits Handbook's jurisdictions were "Hong Kong/Singapore/etc. type
+jurisdictions." Checked directly against `index/chunks.jsonl` rather than assumed: neither
+name appears anywhere in the corpus — the APAC handbook covers only China, Japan, and Taiwan.
+This was a genuinely different bug shape from the two open `verify_answer` tickets, which are
+both about the verifier misreading excerpts that *were* retrieved; here, the draft-generation
+step invented named entities that were never retrieved at all, and the verifier correctly
+caught it before the user ever saw it.
+
+Reproduced the exact question live seven times across the investigation (three before any
+change, four after) using temporary debug instrumentation that printed each search call and
+raw draft — reverted cleanly afterward, checking `git diff --stat` each time to confirm only
+the debug lines were dirty before reverting. All seven reproductions came back correct and
+properly grounded; the fabrication was never reproduced outside the user's original report,
+consistent with a rare (roughly 1-in-4 to 1-in-8, by rough count) stochastic event rather than
+a deterministic bug. Hypothesis: pretrained/outside knowledge of "typical APAC hubs" leaking
+through on named entities specifically, despite an existing instruction against outside
+knowledge that was scoped to figures/norms and didn't explicitly cover entity names.
+
+Presented the user two options — log the finding as a ticket only, or also add a restrictive
+prompt instruction now — with the explicit reasoning that, unlike the two existing
+`verify_answer` tickets (where adding leniency carries real false-negative risk), a stricter
+draft-time grounding instruction only makes the model more conservative, with no symmetric
+downside. User chose to implement the fix now. Added an explicit instruction to
+`SYSTEM_PROMPT` prohibiting any named entity not verbatim in a retrieved excerpt, re-ran the
+full offline suite (49/49) and the live acceptance script (8/8) to confirm no regression, and
+documented the finding — including the honest caveat that a handful of clean reproductions
+cannot statistically prove a fix against a rare event — as a fifth backlog ticket rather than
+silently closing it.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

@@ -176,6 +176,20 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   grows past what syntactic rules can safely assume — see
   `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`. Full investigation, including
   both prototypes' exact results: `docs/TRANSCRIPT.md` § 15.
+- **`SYSTEM_PROMPT` explicitly forbids naming any entity not verbatim in a retrieved
+  excerpt, not just figures.** A live user report showed a draft claiming the APAC handbook's
+  jurisdictions were "Hong Kong/Singapore/etc." — confirmed via direct corpus check that
+  neither name appears anywhere in `index/chunks.jsonl` (the real scope is China, Japan,
+  Taiwan). `verify_answer` correctly rejected the draft, so this never reached the user, but
+  it was a genuine draft-time fabrication (inventing entities never retrieved at all), not a
+  retrieval mix-up or a `verify_answer` misreading — a different bug class from the two
+  `verify_answer` tickets below. Likely cause: pretrained knowledge of "typical APAC hubs"
+  leaking through despite the existing outside-knowledge instruction, which was scoped to
+  figures/norms and didn't name entities explicitly. Fix is purely restrictive (no
+  false-negative risk, unlike the `verify_answer` tickets), so it was added directly rather
+  than deferred; 7 live reproductions (3 before, 4 after) all came back correctly grounded,
+  but that sample is too small to prove the fix against a rare (~1-in-4-ish) event. Full
+  writeup: `docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`.
 - **`VectorIndex` stays plain `numpy`, not a real vector DB — verified live, not assumed.**
   Following the chunking fix, a full Chroma+hybrid-search prototype was built against the
   real 73-chunk corpus (dense embeddings identical to today's, plus a hand-rolled BM25 pass
@@ -311,7 +325,15 @@ verified via a live Chroma+hybrid-search prototype to bring no benefit yet eithe
 as a fourth backlog ticket (`docs/backlog/2026-08-20-vector-db-migration-for-scale.md`).
 43 offline tests pass. `eval.py` passes 8/8 against the real Claude API (last verified live
 right after the chunking fix — re-run it if handbook content, retrieval logic, or
-`SYSTEM_PROMPT` changes). Nothing currently in progress — the four backlog tickets (two
-`verify_answer`, one LLM-assisted chunking, one vector-DB migration) are the natural next
-pickups, all deferred for the same reason: real, designed, or prototyped, but not yet
-justified by this corpus's current size.
+`SYSTEM_PROMPT` changes). A fifth session, prompted by a user-reported live fabrication
+(draft claiming APAC covers "Hong Kong/Singapore," not in the corpus), root-caused it as
+draft-time named-entity hallucination distinct from the two open `verify_answer` tickets,
+and shipped a restrictive `SYSTEM_PROMPT` fix (see decisions above) after confirming no
+regression: 49 offline tests pass, `evals.eval` passes 8/8 live. Documented as a fifth
+backlog ticket rather than closed silently, since 7 clean live reproductions can't prove the
+fix against the rare event it targets:
+`docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`. Nothing currently in
+progress — the five backlog tickets (two `verify_answer`, one LLM-assisted chunking, one
+vector-DB migration, one hallucination finding) are the natural next pickups, four deferred
+because they're real but not yet justified by this corpus's current size, and the fifth
+already fixed but kept open pending stronger confidence in the fix.

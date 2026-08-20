@@ -881,3 +881,43 @@ the two `_matches()` copies have now functionally diverged (only `edge_cases.py`
 compound assertions), and added a general, reusable principle for writing future
 negative-space cases: compound only when the question asks two genuinely independent things,
 not by default.
+
+## 20. A live fabrication of named entities, root-caused and closed with a restrictive fix
+
+**User** pasted a real `main.py --ask "Do employees have any sick days? What aboout 401k?
+What about vision ,dental or medical insurance?"` run whose `verify_answer` rejection quoted
+a draft claiming the APAC Benefits Handbook's jurisdictions were "Hong Kong/Singapore/etc.
+type jurisdictions," and asked plainly: "WHat happensed here?" Claude checked the claim
+directly against `index/chunks.jsonl` rather than assuming — confirmed neither "Hong Kong"
+nor "Singapore" appears anywhere in the corpus; the APAC handbook's real scope is China,
+Japan, and Taiwan only. This was recognized as a different bug shape from the two open
+`verify_answer` tickets: those are about the verifier misreading excerpts that *were*
+retrieved, while here the draft-generation step fabricated named entities never retrieved at
+all — and the safety net (`verify_answer`) caught it correctly before the user ever saw it.
+
+Added temporary debug instrumentation to `src/agent.py` (printing each search call and the
+raw pre-verification draft), reproduced the user's exact question live three times before
+making any change — all three came back correct and grounded, no fabrication — then reverted
+the instrumentation cleanly, confirming via `git diff --stat` that only the debug lines were
+dirty before reverting (a discipline adopted after an earlier session mistake where a blind
+`git checkout --` wiped out real uncommitted work along with debug code). Explained the
+finding to the user in full: root cause (likely pretrained/outside knowledge of "typical
+APAC hubs" leaking through on named entities specifically, since the existing
+outside-knowledge instruction was scoped to figures/norms and didn't explicitly name
+entities), the ~1-in-4-ish observed rate, and why this differs in kind from the two existing
+tickets. Used `AskUserQuestion` to offer two paths — log the ticket only, or also implement a
+low-risk prompt fix now — explicitly reasoning that, unlike the two `verify_answer` tickets
+(where added leniency risks false negatives), a stricter *draft-time* grounding instruction
+carries no symmetric downside: it can only make the model more conservative.
+
+**User** selected: "Also implement the low-risk prompt fix now." Added an explicit clause to
+`SYSTEM_PROMPT` prohibiting any named entity not verbatim in a retrieved excerpt. Verified
+with the same discipline as every other change this session: full offline suite (49/49),
+live `python -m evals.eval` (8/8), and four more live reproductions of the exact fabricating
+question — all four came back correct and grounded, two of them explicitly and correctly
+naming "China, Japan, and Taiwan." Reported the result to the user honestly, including the
+caveat that seven clean reproductions (three pre-fix, four post-fix) cannot statistically
+prove a fix against a rare, roughly 1-in-4-to-1-in-8 event — and documented the full
+investigation, evidence, and fix as a fifth backlog ticket
+(`docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`) rather than closing it
+silently, since the fix's effectiveness is plausible but unproven.
