@@ -46,9 +46,20 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   `build_index`, not the persisted `index/`). Not named `test_*.py`, not in `tests/`, so
   `pytest` never runs it. `_matches()` does substring/keyword matching against expected
   markers (`"12"`, `"unknown"`, `"hedge"`, etc.) — see gaps below.
+- `edge_cases.py` — sibling to `eval.py`, same pattern (live API, `_matches()` heuristic,
+  not pytest-run), but a much larger production-readiness suite: 36 cases across entity
+  resolution, negative space, grounding, consistency, and precedence generalization. Kept
+  separate from `eval.py` so the take-home's 8-query gate stays fast/cheap — run this one on
+  demand, not on every commit (real API cost: ~36 questions × 3-5 Claude calls each).
+  `_matches()`'s marker lists are currently duplicated verbatim between the two files
+  (inherited from how each was written, not yet extracted into a shared module) — see gaps
+  below.
 - `tests/` — offline only (real local embeddings, zero API calls, zero mocks).
   `test_retrieval_recall.py` checks real-corpus retrieval quality against the take-home's
   actual queries — this is the regression guard for chunking/embedding/`k` changes.
+  `test_retrieval_entity_resolution.py` does the same against lexically-varied queries
+  (typos, casing, abbreviations, alternate country names) — the offline half of the
+  `edge_cases.py` production-readiness suite.
 - `docs/backlog/` — deferred, fully-investigated tasks a future session can pick up cold:
   root cause, suggested fix, risk, and test plan already written up, not just a one-line
   TODO. Check here before starting new work in case it's already been diagnosed.
@@ -149,18 +160,31 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   surfaced by `main.py`/`eval.py`. Fine as-is, but if you add a `--debug` flag or similar,
   this is where a rejected draft already lives.
 - **`verify_answer` intermittently rejects legitimate correct answers.** Two related but
-  distinct patterns observed: (a) absence-based inferences ("no regional handbook names
-  California, so the global default applies") sometimes rejected as unsupported, and (b)
+  distinct patterns observed, each with its own backlog ticket (cross-linked to each other —
+  consider whether one fix addresses both before implementing either): (a) absence-based
+  inferences ("no regional handbook names California, so the global default applies")
+  sometimes rejected as unsupported — corroborated by two more live reproductions found
+  while building the `edge_cases.py` suite (the "Chinese national in California" and
+  "Japan/US split" cases), written up in
+  `docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md`; and (b)
   specific-vs-general precedence carve-outs ("for PTO specifically, X takes precedence; for
   all other benefits, refer to Y") misread as an unresolved conflict between X and Y, even
   though X explicitly excludes itself from Y's scope — reproduced live on the flagship
-  Taiwan-PTO example question itself. Every occurrence so far has correctly *not* produced a
-  wrong answer (the downgrade path just falls back to "can't confirm"), so it costs eval-run
-  reliability, not correctness. Pattern (b) has a fully written-up fix proposal, root cause,
-  and false-negative-aware test plan waiting in
-  `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md` — deferred because a
-  false-negative risk (does the fix make the verifier too lenient elsewhere?) was raised and
-  not yet resolved before implementation. Read that file before attempting either pattern.
+  Taiwan-PTO example question itself, written up in
+  `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`. Every occurrence so
+  far has correctly *not* produced a wrong answer (the downgrade path just falls back to
+  "can't confirm"), so it costs eval-run reliability, not correctness. Both tickets have a
+  fully written-up fix proposal, root cause, and false-negative-aware test plan — deferred
+  because a false-negative risk (does the fix make the verifier too lenient elsewhere?) was
+  raised and not yet resolved before implementation. Read the relevant ticket before
+  attempting either pattern.
+- **`_matches()`'s marker lists (`unknown_markers`, hedge words) are duplicated verbatim
+  between `eval.py` and `edge_cases.py`.** Inherited from how each was written, not a
+  deliberate choice. Low risk today, but both files' marker lists have already needed
+  reactive tuning against real live-run phrasing (see the gap above and `HISTORY.md`) — a
+  future fix to one copy that doesn't propagate to the other would silently reintroduce a
+  known class of gap. Worth extracting into a shared module before a third live-tuning round
+  happens; not urgent enough to block anything today.
 - **The Asia-gym hedge still explains what the figure would be under each branch** ("if
   you're in one of those three countries... $50/month would win; if you're elsewhere... only
   the global $50/month applies") — the exact hedge-undercutting pattern the verbosity
@@ -177,11 +201,16 @@ attempt after a live ablation showed it hurt correctness), (c) investigated and 
 prompt caching (real but small win, not worth it yet), and (d) rewrote final answers into a
 rigid three-part verdict/reason/citation structure, iterated against several live runs to
 close two verdict-ordering leaks. A third session, building a production-readiness edge-case
-test matrix, found and fixed a real `version_year` retrieval bug (commit `b7411e4`) and
-found a second, related `verify_answer` bug that's written up but deliberately not yet
-implemented — see `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`.
-36 offline tests pass. `eval.py` passes 8/8 against the real Claude API (last verified live
-right after the `version_year` fix — re-run it if handbook content, retrieval logic, or
-`SYSTEM_PROMPT` changes). In progress: the production-readiness edge-case test matrix itself
-(entity resolution, negative space, grounding, consistency, precedence generalization) still
-needs to be written up as a formal plan in `docs/superpowers/plans/` and executed.
+test matrix, found and fixed a real `version_year` retrieval bug (commit `b7411e4`), and its
+subagent-driven-development execution built and shipped the matrix itself: 5 offline
+entity-resolution tests (`tests/test_retrieval_entity_resolution.py`) and a 36-case live
+acceptance suite (`edge_cases.py`) covering entity resolution, negative space, grounding,
+consistency, and precedence generalization. That execution also surfaced and corroborated
+two distinct `verify_answer` weaknesses, each fully written up but deliberately not yet
+implemented (see `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md` and
+`docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md`). 41 offline
+tests pass. `eval.py` passes 8/8 against the real Claude API (last verified live right after
+the `version_year` fix — re-run it if handbook content, retrieval logic, or `SYSTEM_PROMPT`
+changes). `edge_cases.py` last ran 34/36 live, with the 2 non-passing cases both matching
+the known absence-inference backlog ticket, not new bugs. Nothing currently in progress —
+the two `verify_answer` tickets are the natural next pickup.
