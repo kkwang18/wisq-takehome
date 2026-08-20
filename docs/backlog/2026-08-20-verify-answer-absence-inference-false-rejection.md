@@ -150,8 +150,8 @@ direction, and a pure-fabrication control).
 2. Once root-caused, follow the sibling ticket's test-plan shape: offline prompt-content
    test, live false-positive re-sampling, and adversarial false-negative cases specific to
    this pattern.
-3. Regression: full offline suite and `eval.py` (8/8) after any fix, same discipline as
-   every other prompt change made in this project.
+3. Regression: full offline suite and `python -m evals.eval` (8/8) after any fix, same
+   discipline as every other prompt change made in this project.
 
 ## Files involved
 

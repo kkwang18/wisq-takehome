@@ -4,8 +4,10 @@ Answers questions about Acme's employee handbooks using retrieval-augmented gene
 local embeddings for search, Claude for multi-hop reasoning over conflicting/versioned
 policy documents, with a grounding-verification pass before any answer is returned.
 
-See `docs/superpowers/specs/2026-08-19-rag-qa-system-design.md` for the design, and
-`HISTORY.md` / `TRANSCRIPT.md` for the conversation that shaped it.
+See `docs/superpowers/specs/2026-08-19-rag-qa-system-design.md` for the design,
+`docs/HISTORY.md` / `docs/TRANSCRIPT.md` for the conversation that shaped it, and
+`docs/backlog/` for known gaps and deferred work with full write-ups (not just a one-line
+TODO each).
 
 ## Setup
 
@@ -28,5 +30,9 @@ deprecated:
 
 ## Tests
 
-    pytest                    # fast, fully offline: unit tests + retrieval recall checks
-    python eval.py            # slow, real Claude API calls: full end-to-end acceptance run
+    pytest                       # fast, fully offline: unit tests + retrieval recall checks
+    python -m evals.eval         # slow, real Claude API calls: the 8 take-home example queries
+    python -m evals.edge_cases   # slower, real Claude API calls: 36-case production-readiness
+                                  # suite (entity resolution, negative space, grounding,
+                                  # consistency, precedence generalization) — run on demand,
+                                  # not on every commit

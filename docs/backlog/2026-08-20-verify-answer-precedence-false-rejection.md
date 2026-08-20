@@ -165,8 +165,8 @@ per case instead of 3-5) and confirming they are still rejected after the fix:
    them from a live `answer_question` call, or reconstruct from `index/chunks.jsonl`), both
    before and after the fix. All three must remain UNSUPPORTED after the fix. Any of the
    three flipping to SUPPORTED is a genuine regression and the fix should not ship as-is.
-4. **Regression:** full offline suite (`pytest`) and full `eval.py` (8/8) after the fix, same
-   discipline as every other prompt change made this session.
+4. **Regression:** full offline suite (`pytest`) and full `python -m evals.eval` (8/8) after
+   the fix, same discipline as every other prompt change made this session.
 
 ## Files involved
 

@@ -1,7 +1,7 @@
 # Build History
 
 Curated summary of the decisions, definitions, and course-corrections behind this system.
-The full raw conversation is in `TRANSCRIPT.md`.
+The full raw conversation is in `docs/TRANSCRIPT.md`.
 
 ## The task
 
@@ -170,7 +170,7 @@ Sonnet 5's 1024-token cache minimum — only the system prompt plus the `search_
 tool definition together (1501 tokens) clears it. Verdict: caching would save a real but
 small amount of cost, not the latency that motivated the original investigation, since the
 cacheable prefix is small relative to total call time and `verify_answer`'s call sends no
-system/tools at all. Shelved for now. (Full breakdown: `TRANSCRIPT.md` § 11.)
+system/tools at all. Shelved for now. (Full breakdown: `docs/TRANSCRIPT.md` § 11.)
 
 **A rigid three-part answer structure, iterated live.** Asked to enforce a fixed
 "text-from-HR" shape — verdict, then one reason, then a trailing citation tag, no
@@ -187,8 +187,8 @@ query in a prior run, which reads as model sampling variance rather than a rule 
 Claude stopped there rather than chase a variance floor no `temperature` control can reduce
 on this model. Also surfaced, incidentally: the Asia-gym hedge still explains both branches'
 outcomes, the same undercutting pattern the verbosity-tightening task above tried to close —
-flagged, not fixed, since it's outside this task's scope. (Full detail: `TRANSCRIPT.md` §
-12.)
+flagged, not fixed, since it's outside this task's scope. (Full detail: `docs/TRANSCRIPT.md`
+§ 12.)
 
 ## Production-readiness edge cases: designing the test matrix found two real bugs first
 
@@ -306,5 +306,9 @@ YAGNI, DRY — explicit user instruction, applied throughout) → final whole-br
 live acceptance run against the real Claude API (all 8 example queries from the take-home
 pass). Every non-trivial judgment call made during execution — the two chunking-heuristic
 fixes, the retrieval-k fix, the final review's API-shape fixes, and the live-run hedging fix
-above — is recorded with its reasoning in the SDD ledger at
-`.superpowers/sdd/2026-08-19-rag-qa-system/progress.md`.
+above — was recorded with its reasoning in an SDD ledger at
+`.superpowers/sdd/2026-08-19-rag-qa-system/progress.md` during the build. That path is a
+local, git-ignored workspace (per `superpowers:subagent-driven-development`'s own convention
+— the workspace is deleted once a plan lands, since "the git history is the record now") and
+was never committed; a fresh clone won't have it. The commits and this summary are the
+permanent record.

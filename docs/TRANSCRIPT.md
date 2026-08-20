@@ -3,7 +3,7 @@
 This is the actual conversation that shaped this build — the take-home explicitly asked to
 see "what conversation/questions/definitions" went into it, so this is a faithful record of
 that session with Claude Code (using the `superpowers` plugin), not a reconstruction after
-the fact. A curated summary of just the decisions is in `HISTORY.md`.
+the fact. A curated summary of just the decisions is in `docs/HISTORY.md`.
 
 ---
 
@@ -59,7 +59,7 @@ canned-only vs. a web UI. **User chose: CLI with both modes.**
 
 **Q5 — History capture.** Full transcript + curated summary (recommended) vs. curated summary
 only. **User chose: full transcript + curated summary** — which is this file plus
-`HISTORY.md`.
+`docs/HISTORY.md`.
 
 ## 3. Design presented in chat, then a design gap the user caught
 
@@ -163,7 +163,7 @@ with full reasoning in `.superpowers/sdd/2026-08-19-rag-qa-system/progress.md`:
   on its own initiative. Claude ruled on raising `k` from 5 to 8, applied in both the test
   and the real agent's search tool (since the same risk existed in the live system).
 
-All 12 tasks completed with clean or fixed-and-clean reviews. `HISTORY.md` and this file were
+All 12 tasks completed with clean or fixed-and-clean reviews. `docs/HISTORY.md` and this file were
 then written directly by the controller session (not a subagent), since only this session
 has the actual conversation content.
 
@@ -271,7 +271,7 @@ grounding/quality decisions made explicitly earlier in the project.
 **User** then ran `! export ANTHROPIC_API_KEY=...` directly in the terminal to supply a real
 key, and said: "Lets start with the two safe wins, I have exported the key" — followed
 immediately by "Can you record the whole coding agent history in this chat as well" (the
-request behind this section and the corresponding `HISTORY.md` entry).
+request behind this section and the corresponding `docs/HISTORY.md` entry).
 
 Claude first closed out the pending verification from the verbosity-tightening task: a live
 `eval.py` run against the tightened prompt passed 8/8. It then implemented the two wins via

@@ -16,7 +16,7 @@ an APAC handbook actually covers).
 ```
 documents.yaml → ingest.py → index/{chunks.jsonl,embeddings.npy}
                                         ↓
-question → main.py / eval.py → src/agent.py (Claude + search tool loop) → src/verification.py → answer
+question → main.py / evals.eval → src/agent.py (Claude + search tool loop) → src/verification.py → answer
 ```
 
 - `documents.yaml` — declares each source doc's metadata (`doc_type`, `jurisdictions`,
@@ -47,18 +47,21 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   by any caller).
 - `ingest.py` — `build_index(manifest_path)`, and a CLI that persists to `index/`.
 - `main.py` — CLI: no args runs the 8 take-home example queries, `--ask "..."` runs one.
-- `eval.py` — separate real-API acceptance script (the 8 example queries against a fresh
-  `build_index`, not the persisted `index/`). Not named `test_*.py`, not in `tests/`, so
-  `pytest` never runs it. `_matches()` does substring/keyword matching against expected
-  markers (`"12"`, `"unknown"`, `"hedge"`, etc.) — see gaps below.
-- `edge_cases.py` — sibling to `eval.py`, same pattern (live API, `_matches()` heuristic,
-  not pytest-run), but a much larger production-readiness suite: 36 cases across entity
-  resolution, negative space, grounding, consistency, and precedence generalization. Kept
-  separate from `eval.py` so the take-home's 8-query gate stays fast/cheap — run this one on
-  demand, not on every commit (real API cost: ~36 questions × 3-5 Claude calls each).
-  `_matches()`'s marker lists are currently duplicated verbatim between the two files
-  (inherited from how each was written, not yet extracted into a shared module) — see gaps
-  below.
+- `evals/` — live-API acceptance scripts, grouped separately from the `main.py`/`ingest.py`
+  product CLI since they're QA tooling, not app usage — run as `python -m evals.eval` /
+  `python -m evals.edge_cases` (not `python evals/eval.py`, so `sys.path` resolves
+  `ingest`/`src.*` imports the same way `pytest.ini`'s `pythonpath = .` already does for
+  tests). Neither is named `test_*.py` nor lives in `tests/`, so `pytest` never runs them.
+  - `evals/eval.py` — the 8 take-home example queries against a fresh `build_index`, not the
+    persisted `index/`. `_matches()` does substring/keyword matching against expected
+    markers (`"12"`, `"unknown"`, `"hedge"`, etc.) — see gaps below.
+  - `evals/edge_cases.py` — sibling to `evals/eval.py`, same pattern, but a much larger
+    production-readiness suite: 36 cases across entity resolution, negative space,
+    grounding, consistency, and precedence generalization. Kept separate from `eval.py` so
+    the take-home's 8-query gate stays fast/cheap — run this one on demand, not on every
+    commit (real API cost: ~36 questions × 3-5 Claude calls each). Its `_matches()`'s marker
+    lists are currently duplicated verbatim from `eval.py`'s (inherited from how each was
+    written, not yet extracted into a shared module) — see gaps below.
 - `tests/` — offline only (real local embeddings, zero API calls, zero mocks).
   `test_retrieval_recall.py` checks real-corpus retrieval quality against the take-home's
   actual queries — this is the regression guard for chunking/embedding/`k` changes.
@@ -85,10 +88,12 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   reliably disambiguate. `embed_text()` prepends doc metadata before embedding; the search
   tool also exposes explicit filters so Claude can narrow structurally once it's resolved a
   year/jurisdiction, not just hope similarity gets it right.
-- **`SEARCH_K = 8`, not the more typical 5.** Found via the real-corpus recall test: the
-  APAC scope paragraph (naming the 3 covered countries) ranked 7th of 13 for a jurisdiction
-  query — an adjacent generic continuation paragraph outranked it. This is a live-system
-  risk, not just a test-tuning issue, so `k` is one shared constant used by both.
+- **`SEARCH_K` raised twice from an original 5, now 10** (see the chunking-investigation
+  decision below for the second raise, 8→10). The first raise (5→8) came from the
+  real-corpus recall test: the APAC scope paragraph (naming the 3 covered countries) ranked
+  7th of 13 for a jurisdiction query — an adjacent generic continuation paragraph outranked
+  it. This is a live-system risk, not just a test-tuning issue, so `k` is one shared constant
+  used by both `src/agent.py` and the recall tests.
 - **No `temperature` param on any Claude call; verification call disables thinking.**
   `claude-sonnet-5` rejects non-default sampling params (400). It also runs adaptive
   thinking by default when `thinking` is omitted, and thinking tokens count against the same
@@ -166,7 +171,7 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   (semantic) chunking is documented as a deferred backlog item for when the corpus actually
   grows past what syntactic rules can safely assume — see
   `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`. Full investigation, including
-  both prototypes' exact results: `TRANSCRIPT.md` § 15.
+  both prototypes' exact results: `docs/TRANSCRIPT.md` § 15.
 - **`VectorIndex` stays plain `numpy`, not a real vector DB — verified live, not assumed.**
   Following the chunking fix, a full Chroma+hybrid-search prototype was built against the
   real 73-chunk corpus (dense embeddings identical to today's, plus a hand-rolled BM25 pass
@@ -190,7 +195,7 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   Not currently tested for beyond the SCOPE case in `test_retrieval_recall.py`.
 - **`eval.py`'s `_matches()` is a substring/keyword heuristic on free-form model output**,
   not a semantic check. It was tuned reactively against several live runs' actual phrasing
-  (see `HISTORY.md`/`TRANSCRIPT.md`) and is inherently gameable — a hedge-then-guess answer
+  (see `docs/HISTORY.md`/`docs/TRANSCRIPT.md`) and is inherently gameable — a hedge-then-guess answer
   could plausibly trip an "unknown" marker. Most recently, a correctly-hedged answer phrased
   as "which **specific** country" slipped past the `"which country"` marker entirely (fixed
   by adding `"specific country"`). Treat it as a smoke test, not a strict regression gate —
@@ -227,7 +232,7 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
 - **`_matches()`'s marker lists (`unknown_markers`, hedge words) are duplicated verbatim
   between `eval.py` and `edge_cases.py`.** Inherited from how each was written, not a
   deliberate choice. Low risk today, but both files' marker lists have already needed
-  reactive tuning against real live-run phrasing (see the gap above and `HISTORY.md`) — a
+  reactive tuning against real live-run phrasing (see the gap above and `docs/HISTORY.md`) — a
   future fix to one copy that doesn't propagate to the other would silently reintroduce a
   known class of gap. Worth extracting into a shared module before a third live-tuning round
   happens; not urgent enough to block anything today.
