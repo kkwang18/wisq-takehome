@@ -20,6 +20,7 @@ def load_manifest(path: str) -> list[DocMeta]:
                 jurisdictions=entry.get("jurisdictions"),
                 version_year=entry.get("version_year"),
                 display_name=entry["display_name"],
+                split_sentences_in_sections=entry.get("split_sentences_in_sections"),
             )
         )
     return docs

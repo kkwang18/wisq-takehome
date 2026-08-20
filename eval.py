@@ -47,6 +47,8 @@ def _matches(expected: str, result_text: str, grounded: bool) -> bool:
             "nothing on file",
             "no policy on record",
             "not on record",
+            "no matching handbook version",
+            "no handbook version exists",
         ]
         return any(marker in lowered for marker in unknown_markers) or not grounded
     if expected == "hedge":

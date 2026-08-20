@@ -25,9 +25,14 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   `ElementTree`), no `python-docx`.
 - `src/chunking.py` — one non-empty paragraph = one chunk, tagged with nearest preceding
   heading. `HEADING_STYLES = {"Compact", "Heading2"}` + a `MAX_HEADING_LENGTH = 60` guard.
+  `DocMeta.split_sentences_in_sections` (set via `documents.yaml`) opts specific sections of
+  a specific document into sentence-level splitting instead — a deliberate, manifest-driven,
+  per-section exception, not a corpus-wide default. See decisions below for why it's scoped
+  this narrowly.
 - `src/retrieval.py` — `embed_text()` (contextual header + chunk text),
   `VectorIndex` (build/save/load/search, local `sentence-transformers`, plain numpy, no
-  vector DB), `SEARCH_K = 8` (shared constant, also imported by `src/agent.py`).
+  vector DB), `SEARCH_K = 10` (shared constant, also imported by `src/agent.py` — raised from
+  8, see decisions below).
   `preload_model()` starts the `SentenceTransformer` load on a background thread;
   `_get_model()` joins it before first use — see decisions below.
 - `src/agent.py` — `answer_question()`: Claude + a `search_handbooks` tool, multi-hop
@@ -138,6 +143,30 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   clause from a year-filtered search call — reproduced live, and at least once caused a
   genuinely wrong draft answer, not just a slow one. Global-handbook year disambiguation
   (2025 vs 2026, which have real distinct years) is unaffected.
+- **Sentence-level chunking is a manifest-driven, per-section opt-in
+  (`split_sentences_in_sections`), not a corpus-wide default — because a corpus-wide version
+  was tried and reverted.** A live nondeterminism report traced back to a real retrieval gap:
+  the APAC handbook's `SCOPE` section merges its coverage statement with its exclusion/
+  referral clause into one chunk, diluting the exclusion clause's embedding enough to rank
+  #19-21 of 71 chunks for out-of-APAC PTO questions ("US citizen," "California employee").
+  Splitting every paragraph in the corpus into sentence-level chunks was tried first — it
+  nearly doubled total chunk count (71→136) and, worse, *regressed* an already-passing
+  retrieval-quality test (`test_apac_scope_is_retrievable_to_rule_out_california`) while not
+  even clearly fixing the target queries (their rank got worse for 2 of 3, not better) — more
+  fragments were competing for a fixed `SEARCH_K`. Reverted. Two prototypes (one on the real
+  `SCOPE` text, one synthetic) then confirmed an LLM chunker's differentiating value (sub-
+  sentence splitting, cross-paragraph merging) is real but wasn't needed for this specific
+  fix — the LLM's actual boundary decisions on `SCOPE` were identical to plain sentence-
+  splitting. The fix that shipped: scope sentence-splitting to just `SCOPE` via
+  `documents.yaml`'s `split_sentences_in_sections` (73 chunks, not 136), which fixed the
+  target queries without the corpus-wide regression. `SEARCH_K` still needed raising 8→10
+  afterward — splitting `SCOPE` grew the regional-handbook chunk count 13→15, which pushed a
+  *different* chunk (the country-list sentence) to a new near-tie at rank #9 — the same
+  pattern as the original 5→8 fix, now recurring at the new boundary. LLM-assisted
+  (semantic) chunking is documented as a deferred backlog item for when the corpus actually
+  grows past what syntactic rules can safely assume — see
+  `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`. Full investigation, including
+  both prototypes' exact results: `TRANSCRIPT.md` § 15.
 
 ## 4. Open questions / known gaps
 
@@ -177,7 +206,12 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   fully written-up fix proposal, root cause, and false-negative-aware test plan — deferred
   because a false-negative risk (does the fix make the verifier too lenient elsewhere?) was
   raised and not yet resolved before implementation. Read the relevant ticket before
-  attempting either pattern.
+  attempting either pattern. Note: pattern (a)'s retrieval-side contributor for the specific
+  "no regional handbook covers X" (California/US) shape has since improved — the `SCOPE`
+  chunking fix (see decisions above) raised the resolving excerpt's rank, and 5/5 live
+  re-tests post-fix were correct with no rejections. `verify_answer`'s own reasoning weakness
+  is unchanged and could still surface via other absence-inference shapes; don't treat this
+  ticket as resolved.
 - **`_matches()`'s marker lists (`unknown_markers`, hedge words) are duplicated verbatim
   between `eval.py` and `edge_cases.py`.** Inherited from how each was written, not a
   deliberate choice. Low risk today, but both files' marker lists have already needed
@@ -189,6 +223,13 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   you're in one of those three countries... $50/month would win; if you're elsewhere... only
   the global $50/month applies") — the exact hedge-undercutting pattern the verbosity
   tightening (§3) tried to close but didn't fully. Observed live, flagged, not yet fixed.
+- **LLM-assisted (semantic) chunking is deferred, not implemented.** Two prototypes
+  confirmed it has real differentiating value over mechanical sentence-splitting (sub-
+  sentence exception splitting, cross-paragraph merging) but that capability isn't needed
+  anywhere in this specific 3-document corpus today — every real gap found was fixable more
+  cheaply. Relevant once the corpus grows past what syntactic chunking rules can safely
+  assume. Full writeup, including a required decision-log design for auditability at scale:
+  `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`.
 
 ## 5. Current status
 
@@ -212,5 +253,15 @@ implemented (see `docs/backlog/2026-08-20-verify-answer-precedence-false-rejecti
 tests pass. `eval.py` passes 8/8 against the real Claude API (last verified live right after
 the `version_year` fix — re-run it if handbook content, retrieval logic, or `SYSTEM_PROMPT`
 changes). `edge_cases.py` last ran 34/36 live, with the 2 non-passing cases both matching
-the known absence-inference backlog ticket, not new bugs. Nothing currently in progress —
-the two `verify_answer` tickets are the natural next pickup.
+the known absence-inference backlog ticket, not new bugs. A fourth session, prompted by a
+user-reported live nondeterminism bug, traced it to a real `SCOPE`-chunk retrieval gap,
+tried and reverted a corpus-wide sentence-splitting fix (regressed a passing test), then
+shipped a narrowly-scoped, manifest-driven version instead (`split_sentences_in_sections`)
+plus a `SEARCH_K` 8→10 follow-up raise for the same reason `SEARCH_K` was raised the first
+time. Two chunking prototypes (real-corpus and synthetic) concluded LLM-assisted chunking
+has real value but isn't needed yet for this corpus — deferred as a third backlog ticket
+(`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`). 43 offline tests pass.
+`eval.py` passes 8/8 against the real Claude API (last verified live right after the
+chunking fix — re-run it if handbook content, retrieval logic, or `SYSTEM_PROMPT` changes).
+Nothing currently in progress — the three backlog tickets (two `verify_answer`, one LLM-
+assisted chunking) are the natural next pickups.

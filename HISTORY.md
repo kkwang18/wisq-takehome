@@ -252,6 +252,33 @@ which is where the discussion landed on a two-tier design: deterministic sentenc
 chunking as the free baseline, LLM-assisted semantic chunking reserved for where automated
 recall testing (never manual reading) flags the baseline as insufficient.
 
+## A chunking fix, chased through two failed hypotheses to a scoped, shipped one
+
+Investigating the live nondeterminism report meant actually testing chunking strategies,
+not just discussing them. The first attempt — sentence-level splitting applied corpus-wide —
+looked right in theory and was wrong in practice on two counts: it regressed an
+already-passing retrieval test, and it didn't even improve the queries it was built to fix
+(their rank got worse, not better). Reverted rather than defended.
+
+The second attempt tested whether an LLM could do semantically better than mechanical
+splitting. It produced a working result, but a careful check showed the LLM's actual
+chunking decisions were identical to what a regex would have produced — the improvement came
+from scoping the change to 2 paragraphs instead of 71, not from any semantic intelligence. A
+third, synthetic test then cleanly demonstrated the LLM's real differentiating capability
+(splitting a sentence with no internal punctuation) — real, just not needed anywhere in this
+specific corpus today, since checking two other real candidates for that capability found
+both already retrieved correctly.
+
+The fix that shipped: a manifest-driven, per-section opt-in for sentence-level splitting
+(`documents.yaml`'s `split_sentences_in_sections`), applied to just the one confirmed-broken
+section. This surfaced one more instance of an already-seen pattern — splitting grew the
+regional handbook's chunk count enough to create a new near-tie for a different chunk, fixed
+by raising `SEARCH_K` 8→10, the same move as the original 5→8 fix, now recurring at a new
+boundary. Documented as a third backlog ticket
+(`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`), specifically so the two
+negative-but-informative prototype results don't get re-derived by whoever eventually builds
+that tier for real.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

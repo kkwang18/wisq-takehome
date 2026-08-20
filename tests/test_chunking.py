@@ -82,6 +82,60 @@ def test_chunk_document_treats_long_compact_paragraph_as_body_not_heading():
     assert chunks[0].section_title == "LOCAL LAW PROVISIONS"
 
 
+def test_chunk_document_splits_sentences_only_in_flagged_sections():
+    # Sentence-level splitting is a manifest-driven, per-document, per-section opt-in
+    # (documents.yaml's split_sentences_in_sections), not a corpus-wide default. This
+    # was deliberately narrowed after a corpus-wide sentence-split experiment regressed
+    # an already-passing retrieval-quality test (see CLAUDE.md's chunking decisions):
+    # more fragments compete for a fixed SEARCH_K everywhere, for a problem that was
+    # confirmed to exist in exactly one section. A DocMeta with no
+    # split_sentences_in_sections (the default) must chunk every paragraph exactly as
+    # before, one paragraph = one chunk.
+    doc = DocMeta(
+        file="x.docx",
+        doc_type="regional_handbook",
+        jurisdictions=["Taiwan"],
+        version_year=None,
+        display_name="Test Regional Handbook",
+        split_sentences_in_sections=["SCOPE"],
+    )
+    paragraphs = [
+        Paragraph(text="SCOPE", style="Heading2"),
+        Paragraph(
+            text=(
+                "This handbook applies to employees in Taiwan. It does NOT apply to "
+                "contractors, nor to personnel working in any other location. "
+                "Contractors and personnel outside Taiwan should refer to the global "
+                "handbook."
+            ),
+            style="FirstParagraph",
+        ),
+        Paragraph(text="REGIONAL BENEFITS", style="Heading2"),
+        Paragraph(
+            text="Eligible employees in Taiwan are entitled to 12 days of PTO per year. PTO is requested through the standard tools.",
+            style="FirstParagraph",
+        ),
+    ]
+
+    chunks = chunk_document(paragraphs, doc)
+
+    scope_chunks = [c for c in chunks if c.section_title == "SCOPE"]
+    benefits_chunks = [c for c in chunks if c.section_title == "REGIONAL BENEFITS"]
+
+    assert [c.text for c in scope_chunks] == [
+        "This handbook applies to employees in Taiwan.",
+        "It does NOT apply to contractors, nor to personnel working in any other location.",
+        "Contractors and personnel outside Taiwan should refer to the global handbook.",
+    ]
+    # REGIONAL BENEFITS is not in split_sentences_in_sections, so it stays one chunk per
+    # paragraph even though it also has multiple sentences.
+    assert len(benefits_chunks) == 1
+    assert benefits_chunks[0].text == (
+        "Eligible employees in Taiwan are entitled to 12 days of PTO per year. "
+        "PTO is requested through the standard tools."
+    )
+
+
 def test_chunk_document_still_treats_short_compact_and_heading2_as_headings():
     # Boundary check: short Compact/Heading2 paragraphs (real headings) must
     # still be treated as headings after the length guard is added.

@@ -1,6 +1,9 @@
 # BACKLOG: `verify_answer` over-rejects correct answers based on absence-inference reasoning
 
-**Status:** Not started — new evidence gathered, no fix attempted yet.
+**Status:** Not started on the `verify_answer` fix itself. **Update:** the retrieval-side
+contributor to this pattern's California/US shape has since been addressed — see
+"Retrieval-side update" below. This does not close the ticket; `verify_answer`'s own
+reasoning weakness is unchanged and could still surface via other absence-inference shapes.
 
 **Discovered:** 2026-08-20, during the initial latency-investigation session (first
 reproduction, "California PTO"), and corroborated again the same day during a
@@ -78,6 +81,34 @@ a more specific provision, which is exactly California's and the US's status her
 is named by the APAC regional handbook). The verifier is either failing to retrieve/credit
 this excerpt, or retrieving it but not recognizing that it resolves the "no specific
 provision" case by design, not by coincidence.
+
+## Retrieval-side update (2026-08-20, same day)
+
+Chasing the third reproduction above (the live "US citizen" nondeterminism report) led to a
+genuine, independent finding: the APAC handbook's `SCOPE` section's most directly relevant
+sentence — *"Contractors and personnel outside these three jurisdictions should refer to the
+global Acme Employee Handbook"* — was ranking **#19-21 of 71 total chunks** for exactly these
+queries, nowhere near `SEARCH_K`. This means the root cause for the California/US shape
+wasn't purely a `verify_answer` reasoning gap as originally assumed (by analogy with the
+sibling precedence ticket, where that assumption held) — retrieval was also implicated, at
+least for this specific paragraph.
+
+Fixed via a manifest-driven, scoped sentence-split of just `SCOPE`
+(`documents.yaml`'s `split_sentences_in_sections`) plus a `SEARCH_K` 8→10 follow-up raise —
+full story in `CLAUDE.md`'s chunking decisions and `TRANSCRIPT.md` § 15. Post-fix, 5/5 live
+re-tests of the "US citizen" and "California employee" shapes were correct with no
+rejections (previously intermittent, roughly 1-in-3-to-1-in-2 depending on sampling).
+
+**What this does and doesn't mean for this ticket:** it's meaningful evidence that at least
+part of what looked like pure verifier flakiness was actually a retrieval gap feeding the
+verifier weak evidence to begin with — worth remembering before assuming any future
+absence-inference rejection is automatically this ticket's pattern. It does *not* mean
+`verify_answer`'s own reasoning weakness is fixed or disproven — the mechanism described
+below (the verifier under-crediting inference-from-absence claims) is a separate, real
+property of the verification prompt, independent of whether retrieval happens to hand it
+strong or weak supporting evidence. Any *other* absence-inference case (a different
+jurisdiction, a different benefit, a future document) could still trigger it even with
+perfect retrieval.
 
 ## How this bug is created (root cause, best current understanding)
 

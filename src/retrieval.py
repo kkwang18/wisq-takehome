@@ -10,7 +10,12 @@ from sentence_transformers import SentenceTransformer
 from src.models import Chunk, DocMeta, ScoredChunk
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-SEARCH_K = 8
+# Raised from 8 (was raised from 5 originally for the same reason — see CLAUDE.md's chunking
+# decisions). Splitting APAC's SCOPE section into sentence-level chunks grew the regional
+# handbook's chunk count from 13 to 15, which pushed the country-list sentence to rank #9 of
+# 15 for a jurisdiction-scoping query — a near-tie with rank #8 (score gap: 0.001) that
+# SEARCH_K=8 alone would miss. k=10 restores headroom the same way the original 5->8 fix did.
+SEARCH_K = 10
 
 
 def embed_text(chunk: Chunk) -> str:

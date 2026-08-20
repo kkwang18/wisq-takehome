@@ -16,3 +16,7 @@
   version_year: null
   display_name: "APAC Benefits Handbook"
   active: true
+  # SCOPE's coverage statement and its exclusion/referral clause were one chunk, diluting
+  # the exclusion clause's embedding enough to rank #19-21 of 71 for out-of-APAC PTO
+  # queries (confirmed live and via two prototypes — see CLAUDE.md's chunking decisions).
+  split_sentences_in_sections: ["SCOPE"]

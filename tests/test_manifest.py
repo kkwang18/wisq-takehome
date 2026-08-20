@@ -15,6 +15,21 @@ def test_load_manifest_filters_to_active_entries():
     assert docs[0].jurisdictions is None
     assert docs[0].version_year == 2025
     assert docs[0].display_name == "Fake Handbook 2025"
+    assert docs[0].split_sentences_in_sections is None
+
+
+def test_load_manifest_reads_split_sentences_in_sections_when_present():
+    import yaml
+
+    raw = yaml.safe_load(FIXTURE.read_text())
+    raw[0]["split_sentences_in_sections"] = ["SCOPE"]
+    tmp = FIXTURE.parent / "sample_manifest_with_split_sections.yaml"
+    tmp.write_text(yaml.safe_dump(raw))
+    try:
+        docs = load_manifest(str(tmp))
+        assert docs[0].split_sentences_in_sections == ["SCOPE"]
+    finally:
+        tmp.unlink()
 
 
 def test_load_manifest_preserves_jurisdictions_list():

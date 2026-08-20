@@ -648,3 +648,90 @@ automated recall testing — not a human — flags the baseline as insufficient.
 provide a document showing decision points it made? Also are you recording our conversation
 down, that's a key part of this take home assignment" — the second question is the direct
 cause of this section existing; the first is addressed in the response that follows.
+
+## 16. Two chunking prototypes, a reverted regression, and a shipped fix
+
+Claude answered the audit-trail question directly: yes, and non-negotiable for the
+LLM-assisted tier specifically, since nobody reads the source documents — proposed a
+per-decision rationale log (paragraph ID, action, rationale) as a hard requirement, not an
+optional nicety, modeled on this project's own `docs/backlog/*.md` pattern applied at
+ingest time instead of after the fact.
+
+**Tier 1 attempt.** Claude implemented sentence-level splitting in `chunk_document()` via
+TDD (updated/added tests, red then green), rebuilt the real index, and ran the full offline
+suite — which surfaced a real regression: `test_apac_scope_is_retrievable_to_rule_out_california`
+failed. Total chunk count had nearly doubled (71→136); the country-list sentence that test
+protects now ranked #13 of 20 regional chunks, worse than the original near-miss `SEARCH_K`
+was raised to fix. Worse, checking the fix's *own* target showed it hadn't worked either —
+the `SCOPE` exclusion sentence's rank got worse, not better, for 2 of 3 originally-failing
+queries (US citizen: #19→#29 of 71; California: #21→#33). Claude stopped, reported this
+plainly rather than push forward ("this is worth stopping on — the actual empirical result
+contradicts the hypothesis I proposed two turns ago"), and did not commit the change.
+
+**User:** "What about chunking on semantics such as PTO entitlement, gym reimbursement, a
+precedence rule?" Claude reverted the sentence-splitting experiment cleanly (`git status`
+confirmed only the two touched files were dirty; `git checkout --` used correctly this time,
+learning applied from the earlier mid-session incident) and evaluated the proposal properly:
+semantic/topic grouping is a genuinely different lever than syntactic splitting (it can
+*merge*, which sentence-splitting never can), but flagged a serious architectural risk before
+anything else — semantic grouping must stay within one source document, since every existing
+`doc_type`/`version_year`/`jurisdiction` filter depends on that 1:1 chunk-to-document mapping,
+and cross-document topic merging would destroy the entire 2025-vs-2026 and global-vs-APAC
+disambiguation this system is built around.
+
+**User:** "Yes, prototype it." Claude built a real, working prototype: called Haiku with a
+verbatim-only chunking prompt on the actual `SCOPE` section text, inserted the results into
+the real 71-chunk index in place of the original two paragraphs, and re-ran the same rank
+checks. Results looked promising (California: #21→#16; Chinese-national-in-CA: rank #8;
+regression check passed, unlike the corpus-wide attempt) — but Claude caught an important
+confound before declaring victory: the LLM's actual chunking *decisions* were byte-identical
+to what mechanical sentence-splitting would have produced for this specific paragraph, and
+the fix only touched 2 paragraphs instead of 71. The improvement was very likely attributable
+to narrow scope, not LLM intelligence — the same lesson as the regression, restated. Also
+caught, via an automated verbatim-substring check built into the prototype itself: the LLM
+had silently normalized a curly apostrophe to a straight one — not a paraphrase, but not
+byte-identical either.
+
+**User:** "Yes, run that second prototype" (to actually test the LLM's differentiating value).
+Claude first checked the real corpus for a second genuinely broken case requiring
+cross-paragraph merging or sub-sentence splitting — checked two real candidates (the `SCOPE`
+"supplements... APAC markets listed above" backward reference, and the `LOCAL LAW
+PROVISIONS` "statutory minimum overrides" sub-sentence exception) and found **both already
+retrieve correctly today** (ranks #1 and #3 respectively) — a real, honestly-reported finding
+that this corpus doesn't currently have a second broken case, not just a failure to find one.
+Built a synthetic paragraph instead (explicitly labeled as constructed, not real corpus
+content, to stay consistent with the project's existing offline-fixture convention) —
+one sentence, no internal punctuation, with an embedded exception. Mechanical splitting
+produced 1 chunk (nothing to split on); the LLM correctly separated it into 2 verbatim,
+semantically distinct chunks. A clean, honest demonstration that the capability gap is real
+— just not currently exercised anywhere in this specific 3-document corpus.
+
+**User:** "Apply the narrow fix to SCOPE now, document the LLM assisted tier as a ticket
+that can be worked later." Claude checked `documents.yaml`/`src/manifest.py`/`src/models.py`
+first to find the project's existing pattern for deliberate, document-specific configuration
+(the `active` flag), and extended it rather than hardcoding section-name checks into
+`chunking.py`: a new `DocMeta.split_sentences_in_sections` field, manifest-driven, TDD'd
+across all three layers (models, manifest parsing, chunking behavior) with tests confirming
+both the opt-in behavior *and* that everything else stays unchanged by default. Opted in
+just `SCOPE` via `documents.yaml`. Rebuilding the real index produced 73 chunks (not 136) —
+matching the first prototype's math exactly.
+
+Running the full offline suite against the real rebuilt index surfaced one more thing: the
+same regression test failed again, but only barely — the country-list sentence now ranked
+#9 of 15 regional chunks (regional count grew 13→15 from splitting `SCOPE`), a near-tie with
+rank #8 (score gap: 0.001), and rank #10 also named the covered countries. Claude recognized
+this as literally the same pattern as the original `SEARCH_K` 5→8 fix recurring at a new
+boundary, and raised `SEARCH_K` 8→10 with a comment explaining why. Full offline suite: 43/43.
+Live `eval.py`: one failure on the first run — not a regression, the same recurring
+`_matches()` marker-brittleness class as before (a correct "unknown" decline phrased as "no
+matching handbook version found" wasn't in the marker list) — fixed the matcher, re-ran:
+8/8. Direct re-tests of the two originally-failing query shapes: 5/5 correct, no rejections
+(previously intermittent).
+
+Claude wrote a third backlog ticket
+(`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`) documenting both prototypes in
+full — including the honest finding that the LLM's value wasn't needed for the shipped fix —
+so a future session doesn't have to re-run either experiment, and updated the existing
+absence-inference ticket with a "Retrieval-side update" section clarifying that this fix
+addresses one contributing cause for one query shape, not the underlying `verify_answer`
+weakness itself, which remains open.
