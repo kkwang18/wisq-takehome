@@ -49,8 +49,24 @@ intermittently rejected as unsupported.
    Taiwan) provisions—there is no basis for treating the US as 'the global default'
    location..."*
 
-Both rejections are wrong. The real corpus (`index/chunks.jsonl`) contains, from the global
-handbook's SECTION 1:
+**A third reproduction**, found by the user running the live CLI directly (not via
+`edge_cases.py`), same day: `python3 main.py --ask "What is the PTO policy a us citizen"` run
+twice back-to-back produced different outcomes — a correctly-grounded "15 days" on one run,
+and on the other:
+
+> "UNSUPPORTED: The excerpts do not state that there is no regional handbook covering the
+> US, nor any information about US-specific PTO policy or the absence of a regional handbook
+> for the US. This claim is fabricated/inferred beyond what the excerpts support."
+
+Same shape as the other two: the verifier demands the excerpts *state the absence* of a
+regional handbook, when what actually resolves the question is the global handbook's
+affirmative "applies worldwide... unless a specific provision states otherwise" clause,
+which is present in the corpus and (per the other run's success) is sometimes credited and
+sometimes not — pure run-to-run sampling variance on top of the same underlying prompt gap
+(no `temperature` control exists on `claude-sonnet-5`; see `CLAUDE.md` § 3).
+
+Both rejections above are wrong. The real corpus (`index/chunks.jsonl`) contains, from the
+global handbook's SECTION 1:
 
 > "It applies to all Acme personnel worldwide, including both full-time employees and
 > engaged contractors, regardless of the country in which they perform their work, unless a
