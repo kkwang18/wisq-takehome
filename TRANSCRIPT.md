@@ -421,3 +421,93 @@ only the global $50/month benefit applies") — the exact hedge-undercutting pat
 verbosity-tightening task tried to close ("do not also reveal what the answer would be under
 each possible resolution") but evidently didn't fully. Flagged to the user, not fixed — out
 of scope for a task that was already about a different part of the answer.
+
+## 13. Production-readiness edge cases — a walkthrough that found two real bugs
+
+**User:** "Lets work through some more edge cases and ensure our system is production
+ready," followed by five categories, each with a precise one-sentence definition: entity
+resolution (typos/casing/synonyms/compound entities), negative space (declining or
+correcting rather than fabricating on out-of-scope or false-premise questions), grounding
+(saying unknown for plausible-sounding but unsupported questions — "the core anti-
+hallucination requirement of the whole assignment"), consistency (rephrasing shouldn't
+change the verdict), and precedence (generalizing across the full set of covered countries,
+"not just the single example (Taiwan) it was likely tuned against"). Asked for a walkthrough
+of how to test these *before* implementing.
+
+Claude invoked `superpowers:writing-plans`, then — rather than design in the abstract —
+dumped and read every chunk in `index/chunks.jsonl` to ground the case matrix in the real
+document content instead of assumptions. This surfaced real material: the APAC handbook
+explicitly excludes contractors and scopes coverage by "based in and working from," not
+nationality, creating genuine traps (a Chinese national working from California should get
+global benefits, not regional); the conference/training budget ($1,000/year, Section 5.2)
+exists only in the global handbook, giving a precedence-generalization case beyond the
+PTO/gym pair the original 8 queries already covered. Claude proposed a two-tier test
+architecture (offline retrieval-level for lexical robustness; a new live `edge_cases.py` for
+full-agent behavior, kept separate from `eval.py` on cost/speed grounds) and flagged one
+un-tested risk found while designing the matrix: the APAC handbook's `version_year=None` —
+undated because it has no yearly editions — could get silently excluded by a year-filtered
+search if a question named both a region and a year (e.g. "Taiwan PTO in 2025").
+
+**User:** "Is this case matrix generalized examples you thought of or is this all of the
+different combinations you plan on handling?" Claude answered directly: illustrative, not
+exhaustive — laid out the actual combinatorial size per category (100+ cases if fully
+crossed) and proposed a scoping rule: full cross-product only for precedence generalization
+(since proving it isn't Taiwan-specific is the entire point of that category), one
+representative per distinct failure mechanism everywhere else (a typo test on Taiwan and a
+typo test on Japan exercise the same code path, so testing both adds no signal).
+
+**User:** "Perfect and how are you thinking we handle 'Taiwan PTO in 2025'" — asking about
+the flagged risk specifically. Claude proposed the retrieval-layer fix (treat
+`version_year=None` as "matches any year," not "matches only no filter") and the TDD plan to
+verify it, still as a proposal, not yet implemented.
+
+**Then the user ran it themselves:** `python3 main.py --ask "What is the PTO policy for
+Taiwan PTO in 2025"` — and got a rejected answer, pasted verbatim, asking what should
+happen. Rather than assume this confirmed the predicted bug, Claude added temporary debug
+instrumentation (search calls + draft, reverted via targeted `Edit` afterward — not
+`git checkout --`, learning from the earlier incident) and reproduced the same query 3 more
+times live. The debug output revealed **two independent bugs, not one**: Run 3 showed the
+predicted retrieval bug directly — Claude's first search included `version_year=2025`
+alongside a Taiwan-scoped query, returned zero APAC content, and Claude drafted a genuinely
+*wrong* answer (14 days) before a later, unfiltered search finally found the regional
+clause too late to correct course; `verify_answer` correctly caught and rejected that wrong
+draft. But the user's original run showed a *different* failure: the draft had correctly
+said 12 days, and `verify_answer` wrongly rejected it, reasoning the APAC PTO carve-out
+"does not clearly resolve" against the global handbook's general "more generous" rule — a
+misreading, since the APAC clause explicitly excludes PTO from "all other benefits." Two
+real, independent, stacking bugs on the exact flagship example query.
+
+**User:** "Can you create a todo list. Confirm with me, provide evidence each task is
+completed successfully and that it doesn't create any new bugs. Then commit the changes
+before starting the next task. Fix bug 1, bug 2, then pick up where we left off with the
+matrix." Claude proposed the 3-task order and confirmed scope for Task 1 before touching
+code.
+
+**Task 1 (retrieval fix):** TDD — tightened `test_search_filters_by_version_year`, added a
+dedicated `test_search_version_year_filter_always_includes_undated_chunks` (red before the
+fix), re-scoped `test_search_returns_empty_when_filters_match_nothing` to
+`doc_type="global_handbook"` since the old fixture-only "no match" case no longer held once
+undated chunks legitimately started matching every year. One-line fix in
+`VectorIndex.search()`. Evidence: 36/36 offline, 3/4 live flagship reproductions correct
+(the 1 failure confirmed as Bug 2, not this one), full `eval.py` 8/8. Committed as `b7411e4`.
+
+**Task 2 (verifier fix), proposed then challenged:** Claude proposed adding a
+specific-carve-out-overrides-general-rule instruction to `build_verification_prompt`.
+**User:** "Could this open up the change for false negatives?" — a sharp, correct challenge:
+re-running the flagship query only tests whether false positives (correct drafts wrongly
+rejected) go down, and can't reveal whether the same permission-to-be-lenient instruction
+makes the verifier *too* lenient elsewhere. Claude tightened the instruction with an explicit
+boundary clause (the exemption only fires when the excerpt unambiguously covers the queried
+case) and designed three adversarial test drafts — a fabricated number, a draft that
+deliberately misapplies the general rule over the specific one (the exact inverse of the
+fix's own claim, and the sharpest directionality test), and a pure-fabrication control — to
+be run against `verify_answer()` directly, before implementing.
+
+**User:** "For now can you write this as a bug ticket. But it in a new directory, label it
+to indicate future tasks. Lets log the issue so a future agent can pick up from here." Claude
+created `docs/backlog/` and wrote
+`docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md` — root cause, verbatim
+rejection quotes from live runs, the suggested fix, the false-negative risk raised but not
+resolved, and the full test plan (offline prompt-content check, live false-positive
+re-sampling, and the three adversarial false-negative cases) — so a future session can
+resume without re-deriving any of this investigation.

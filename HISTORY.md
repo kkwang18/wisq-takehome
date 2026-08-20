@@ -190,6 +190,42 @@ outcomes, the same undercutting pattern the verbosity-tightening task above trie
 flagged, not fixed, since it's outside this task's scope. (Full detail: `TRANSCRIPT.md` §
 12.)
 
+## Production-readiness edge cases: designing the test matrix found two real bugs first
+
+Asked to design tests for five production-readiness categories (entity resolution, negative
+space, grounding, consistency, precedence generalization) before implementing them, Claude
+grounded the design in the actual document content (read every chunk in
+`index/chunks.jsonl`) rather than assumption, and flagged one risk while doing so: the APAC
+regional handbook's `version_year=None` (undated, since it has no yearly editions) could get
+silently excluded by a year-filtered search on a question naming both a region and a year —
+e.g. "Taiwan PTO in 2025."
+
+The user tested that exact question themselves and hit a rejected answer. Reproducing it
+live with debug instrumentation revealed **two independent, stacking bugs** on the flagship
+example query, not one: (1) the predicted retrieval bug — a year filter applied to a
+regional-scoped search excluding the APAC precedence clause, which at least once caused a
+genuinely wrong draft (14 days instead of 12) — and (2) a separate `verify_answer` weakness,
+visible in the user's own run: a *correct* draft (12 days) rejected because the verifier
+misread an explicit "for PTO specifically, X takes precedence; for all other benefits, refer
+to Y" carve-out as unresolved ambiguity between X and Y.
+
+Bug 1 was fixed via TDD (`VectorIndex.search()` now treats `version_year=None` as "matches
+any year," not "matches only no filter") — 36/36 offline, live reproduction went from mixed
+correctness to 3/4 correct with the remaining failure confirmed as Bug 2, full `eval.py`
+8/8. Committed separately as its own change.
+
+Bug 2's fix was proposed, then the user asked a sharp question: **"Could this open up the
+change for false negatives?"** — correctly identifying that re-testing the flagship query
+only checks whether wrongly-rejected-correct-answers go down, not whether the same
+leniency-granting instruction makes the verifier miss genuinely wrong answers elsewhere.
+Rather than implement against an unresolved risk, the fix (with a tightened boundary clause)
+and a concrete adversarial test plan — three deliberately wrong drafts designed to catch a
+false-negative regression, including one that's the exact directional inverse of the fix's
+own claim — were written up as a backlog ticket instead:
+`docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`. Full root cause,
+verbatim rejection quotes, suggested fix, and test plan are there for a future session to
+pick up without re-deriving the investigation.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

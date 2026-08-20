@@ -49,6 +49,9 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
 - `tests/` — offline only (real local embeddings, zero API calls, zero mocks).
   `test_retrieval_recall.py` checks real-corpus retrieval quality against the take-home's
   actual queries — this is the regression guard for chunking/embedding/`k` changes.
+- `docs/backlog/` — deferred, fully-investigated tasks a future session can pick up cold:
+  root cause, suggested fix, risk, and test plan already written up, not just a one-line
+  TODO. Check here before starting new work in case it's already been diagnosed.
 
 ## 3. Key decisions and why
 
@@ -117,6 +120,13 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   absence reasoning, including "no matching year") before it held reliably; some residual
   variance across live runs looks like model sampling noise rather than a rule gap, since the
   same query was clean in one run and violated in another with identical instructions.
+- **`VectorIndex.search()`'s `version_year` filter treats `version_year=None` as "matches
+  any year filter,"** not "matches only when no filter is given." The APAC regional handbook
+  has no yearly editions (it's evergreen), so a question naming both a region and a year
+  (e.g. "Taiwan PTO in 2025") could otherwise silently exclude the regional precedence
+  clause from a year-filtered search call — reproduced live, and at least once caused a
+  genuinely wrong draft answer, not just a slow one. Global-handbook year disambiguation
+  (2025 vs 2026, which have real distinct years) is unaffected.
 
 ## 4. Open questions / known gaps
 
@@ -138,14 +148,19 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
 - **`VerifiedAnswer.rejected_draft` has no reader yet** — written on downgrade, never
   surfaced by `main.py`/`eval.py`. Fine as-is, but if you add a `--debug` flag or similar,
   this is where a rejected draft already lives.
-- **`verify_answer` intermittently rejects legitimate absence-based inferences** (e.g. "no
-  regional handbook names California, so the global default applies") — observed across
-  several different queries and several live runs this session, at a rate that looks like
-  real LLM verifier variance rather than a one-off. Not fixed — every occurrence so far has
-  correctly *not* produced a wrong answer (the downgrade path just falls back to "can't
-  confirm"), so it costs eval-run reliability, not correctness. Would require touching
-  `verify_answer`'s own prompt/logic to address, which no session so far has been scoped to
-  do.
+- **`verify_answer` intermittently rejects legitimate correct answers.** Two related but
+  distinct patterns observed: (a) absence-based inferences ("no regional handbook names
+  California, so the global default applies") sometimes rejected as unsupported, and (b)
+  specific-vs-general precedence carve-outs ("for PTO specifically, X takes precedence; for
+  all other benefits, refer to Y") misread as an unresolved conflict between X and Y, even
+  though X explicitly excludes itself from Y's scope — reproduced live on the flagship
+  Taiwan-PTO example question itself. Every occurrence so far has correctly *not* produced a
+  wrong answer (the downgrade path just falls back to "can't confirm"), so it costs eval-run
+  reliability, not correctness. Pattern (b) has a fully written-up fix proposal, root cause,
+  and false-negative-aware test plan waiting in
+  `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md` — deferred because a
+  false-negative risk (does the fix make the verifier too lenient elsewhere?) was raised and
+  not yet resolved before implementation. Read that file before attempting either pattern.
 - **The Asia-gym hedge still explains what the figure would be under each branch** ("if
   you're in one of those three countries... $50/month would win; if you're elsewhere... only
   the global $50/month applies") — the exact hedge-undercutting pattern the verbosity
@@ -161,7 +176,12 @@ partly fixed the ~5-10s per-answer latency (`preload_model()`; reverted a batch-
 attempt after a live ablation showed it hurt correctness), (c) investigated and shelved
 prompt caching (real but small win, not worth it yet), and (d) rewrote final answers into a
 rigid three-part verdict/reason/citation structure, iterated against several live runs to
-close two verdict-ordering leaks. 35 offline tests pass. `eval.py` passes 8/8 against the
-real Claude API (last verified live at the end of that structural-rewrite work — re-run it
-if handbook content, retrieval logic, or `SYSTEM_PROMPT` changes). Nothing currently in
-progress.
+close two verdict-ordering leaks. A third session, building a production-readiness edge-case
+test matrix, found and fixed a real `version_year` retrieval bug (commit `b7411e4`) and
+found a second, related `verify_answer` bug that's written up but deliberately not yet
+implemented — see `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`.
+36 offline tests pass. `eval.py` passes 8/8 against the real Claude API (last verified live
+right after the `version_year` fix — re-run it if handbook content, retrieval logic, or
+`SYSTEM_PROMPT` changes). In progress: the production-readiness edge-case test matrix itself
+(entity resolution, negative space, grounding, consistency, precedence generalization) still
+needs to be written up as a formal plan in `docs/superpowers/plans/` and executed.
