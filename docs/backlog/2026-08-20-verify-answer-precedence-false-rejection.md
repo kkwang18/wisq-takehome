@@ -19,6 +19,13 @@ debugging session. They are independent: the retrieval bug could cause an actual
 draft; this bug causes a *correct* draft to be wrongly rejected. Do not re-open the retrieval
 bug as part of this ticket.
 
+**Related, sibling ticket (still open):**
+`docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md` covers a
+different but similarly-shaped `verify_answer` weakness — rejecting correct
+absence-based-inference answers ("no specific provision names X, so the stated general
+default applies") rather than specific-vs-general precedence carve-outs. Consider whether
+one fix addresses both before implementing either in isolation.
+
 ## Summary
 
 `verify_answer` (`src/verification.py`) sometimes rejects a factually correct draft answer
