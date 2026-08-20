@@ -226,6 +226,32 @@ own claim — were written up as a backlog ticket instead:
 verbatim rejection quotes, suggested fix, and test plan are there for a future session to
 pick up without re-deriving the investigation.
 
+## The edge-case plan executed, and a live nondeterminism report reopened the chunking design
+
+The two-task plan above was executed via subagent-driven development in an isolated
+worktree: Bug 1 fixed via TDD (`b7411e4`), Bug 2 deferred as a second backlog ticket, then
+the edge-case suite itself built and reviewed. The one real judgment call during execution:
+Task 2's implementer live-tested 34/36 cases correctly but mischaracterized 2 of the 3
+failures as "corpus limitations" — Claude caught this against the real corpus text before
+trusting the report, ruled the test cases correct as written, and had the commit
+message/report corrected rather than the code. Final whole-branch review clean; merged to
+`main`.
+
+Running the merged system directly, the user hit the predicted class of bug live — the same
+question, twice, gave a correct answer once and a wrong rejection once. Explaining why
+("I thought this was reading from vectors, which should be deterministic?") led to
+distinguishing the fully-deterministic embedding-search layer from the sampled LLM layers
+wrapped around it — and, chasing "could chunking help," to a genuinely new finding: the
+single most relevant sentence for out-of-APAC PTO questions ranks **#19-21 of 71 chunks**,
+which revises the earlier absence-inference ticket's root cause (it isn't purely a verifier
+problem for this pattern; retrieval is also implicated). A chunking-strategy discussion
+followed the same pattern as the rest of this project — every claim tested, not assumed —
+covering seven strategies, a real constraint ("I'm not allowed to look at the documents"),
+its reversal, and finally scaling the question to "hundreds or thousands of documents,"
+which is where the discussion landed on a two-tier design: deterministic sentence-level
+chunking as the free baseline, LLM-assisted semantic chunking reserved for where automated
+recall testing (never manual reading) flags the baseline as insufficient.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

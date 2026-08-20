@@ -511,3 +511,140 @@ rejection quotes from live runs, the suggested fix, the false-negative risk rais
 resolved, and the full test plan (offline prompt-content check, live false-positive
 re-sampling, and the three adversarial false-negative cases) — so a future session can
 resume without re-deriving any of this investigation.
+
+## 14. Executing the edge-case plan via subagent-driven development
+
+**User:** "Can you create a todo list. Confirm with me, provide evidence each task is
+completed successfully and that it doesn't create any new bugs. Then commit the changes
+before starting the next task. Fix bug 1, bug 2, then pick up where we left off with the
+matrix (write it up as a formal plan... and we pick an execution mode)." Claude proposed a
+3-task order (fix the `version_year` bug, fix the `verify_answer` precedence bug, then the
+edge-case matrix), got sign-off on Task 1's scope, and — for Bug 1 — went straight to TDD:
+tightened `test_search_filters_by_version_year`, added
+`test_search_version_year_filter_always_includes_undated_chunks` (red before the fix), fixed
+`VectorIndex.search()` so `version_year=None` matches any year filter instead of only an
+absent one. Evidence: 36/36 offline, 3/4 live flagship reproductions correct (the 1 failure
+confirmed as the separate Bug 2, not this one), full `eval.py` 8/8. Committed as `b7411e4`.
+
+For Bug 2, Claude proposed a tightened verifier instruction with a boundary clause and three
+adversarial test drafts. **User:** "For now can you write this as a bug ticket... in a new
+directory, label it to indicate future tasks" — same treatment as Bug 1's sibling ticket:
+`docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`.
+
+**User:** "Lets go on to task 3." Claude wrote the formal plan
+(`docs/superpowers/plans/2026-08-20-production-readiness-edge-cases.md`, two tasks: offline
+entity-resolution retrieval tests, then the live 36-case `edge_cases.py` suite) and offered
+execution modes. **User:** "Subagent-driven." Claude set up an isolated worktree
+(`.worktrees/edge-case-plan`, careful to branch from local HEAD rather than
+`EnterWorktree`'s default `origin/main`, since local `main` was several commits ahead and
+unpushed), ran the pre-flight conflict scan, and dispatched Task 1 (haiku, fully-specified
+transcription task) — clean report, clean review, approved.
+
+Task 2's implementer (haiku) built `edge_cases.py`, ran it live (34/36), and reported
+`DONE_WITH_CONCERNS` — but its own characterization of 2 of the 3 failures ("corpus
+boundary limitations... California and US PTO not in handbooks") was wrong, and Claude
+caught this itself before trusting the report: the real corpus's global-handbook Section 1
+explicitly states coverage applies "worldwide... regardless of the country... unless a
+specific provision states otherwise," which resolves both cases via the global default. This
+was verified directly against `index/chunks.jsonl`, not assumed. Claude ruled the expected
+markers correct-as-written, confirmed the actual committed code was untouched by the wrong
+narrative, and resumed the implementer for one fix round to correct the commit message and
+report rather than the code. Scoped re-review: all addressed, no new breakage.
+
+The final whole-branch review (dispatched on the most capable available model) came back
+clean — "Ready to merge: Yes" — with three Minor items triaged: a stale `CLAUDE.md` (fixed
+directly by Claude as controller-level bookkeeping, not a subagent fix-loop, since it was
+documentation not code), a DRY marker-list duplication between `eval.py` and `edge_cases.py`
+(deferred, documented), and two test cases with less discriminating power than intended
+(noted for a future revision). Claude also wrote a *second* backlog ticket
+(`docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md`) distinguishing
+this newly-corroborated absence-inference pattern from the sibling precedence-carve-out
+ticket, cross-linked, with an explicit note to consider one fix for both.
+
+Tests green (41/41), worktree merged to `main` via fast-forward, branch and worktree cleaned
+up, per `superpowers:finishing-a-development-branch`'s standard 3-option menu — **user chose
+"1. Merge back to main locally."**
+
+## 15. A live nondeterminism report leads into a chunking-strategy design discussion
+
+**User** ran the merged system directly and hit exactly the kind of thing this plan was
+built to catch: `python3 main.py --ask "What is the PTO policy a us citizen"` twice
+back-to-back produced a correct "15 days" answer once and an `UNSUPPORTED` rejection the
+other time — "Why is there nondeterministic behavior?" Claude explained two layered causes:
+`claude-sonnet-5`'s lack of a `temperature=0` option (general sampling variance, documented
+in `CLAUDE.md` § 3) and, more specifically, that the rejection text was a near-exact match to
+the already-ticketed absence-based-inference bug — a third live reproduction. Added to the
+ticket as corroborating evidence, committed.
+
+**User:** "I thought this system was reading from vectors which should be deterministic?"
+Claude drew the distinction precisely: `VectorIndex.search()` (embedding + cosine similarity)
+*is* fully deterministic — no LLM, no sampling, same query string always returns the same
+ranked chunks. The nondeterminism enters through the LLM layers wrapped around it: Claude
+generates the search query text itself, drafts the answer, and a separate LLM call verifies
+it — three sampled calls, none of them the vector search itself.
+
+**User:** "Could the way we are chunking help alleviate this issue?" Rather than answer from
+theory, Claude ran the actual retrieval pipeline against the three queries in question and
+found a concrete, previously-unknown fact: the APAC `SCOPE` paragraph's most directly relevant
+sentence — "personnel outside these three jurisdictions should refer to the global Acme
+Employee Handbook" — ranks **#19–21 of 71** total chunks for exactly the queries that need
+it, nowhere near `SEARCH_K=8`. This revised Claude's own earlier root-cause understanding:
+the absence-inference ticket had assumed (by analogy with the sibling precedence ticket,
+where it was true) that the resolving excerpt was always present in `cited_chunks` — for this
+pattern, that assumption doesn't hold. The gap is a retrieval/chunking problem for at least
+part of the failure, not purely a verifier-reasoning one.
+
+**User:** "How do these solutions scale as we add more documents or more complicated
+exception boundaries?" Claude re-scanned the corpus for the general-shape pattern (a
+paragraph combining a broad claim with a "does not apply"/"unless"/"except" exception) and
+found three more structurally similar, untested candidates (`SECTION 1` P1, `SECTION 8` P3,
+APAC `CONFLICTS` P2), then evaluated six-then-seven chunking strategies (status quo,
+sentence-level, targeted manual splitting, section-level, additive hybrid, embedding-only,
+and automated keyword-detection) along two axes: does discovery/effort scale with document
+count, and does accuracy hold as exceptions get more complex. Manual approaches (targeted
+splitting, additive hybrid) scored well per-instance but worst on discovery cost, which grows
+unboundedly with corpus size; automated keyword-detection scored well on effort but poorly on
+precision as document phrasing diversifies.
+
+**User:** "For this task I am not allowed to look at the documents, so there cant be a manual
+review. the system we build should consider scale always." Claude disqualified the two
+manual-review-dependent strategies outright, drew a distinction between legitimate
+*structural* inspection (needed to build any chunking pipeline at all — the same way the
+original build read docx XML to discover `pStyle="Compact"`/`"Heading2"`) versus prohibited
+*content-specific* hand-tuning (choosing a specific paragraph's split point by reading and
+understanding its meaning), and flagged honestly that the existing `HEADING_STYLES` heuristic
+was itself derived the prohibited way — a real, pre-existing tension in the shipped system,
+not something to fix now but worth surfacing. Introduced sliding-window chunking as a new,
+fully-mechanical candidate and recommended sentence-level or sliding-window over the
+keyword-detection approach given the constraint.
+
+**User:** "I take it back I can do some manual review, would that make c and e more
+appealing?" Claude declined to simply say yes — reasoned that permission removes the
+*prohibition* but not the *cost*, and proposed reconciling "manual review is allowed" with
+"the system should always consider scale" by keeping *discovery* automated (offline recall
+testing, no document reading) while treating *fixes* as small, bounded, reactive reviews of
+one flagged paragraph — not proactive full-document reads. Still preferred the additive
+hybrid over targeted splitting even with review allowed, on pure regression-risk grounds
+(additive can't break what currently passes; replacement can).
+
+**User:** "Ah okay, yes a human reading and splitting the document is too much. Imagine a
+system where we had hundreds or thousands of HR documents." Claude reassessed at that order
+of magnitude: keyword-detection's precision problem gets worse with document diversity;
+sentence-level/sliding-window chunking stays viable but exposes a second, related scaling
+threshold — `VectorIndex`'s brute-force numpy search (documented as a deliberate "no vector
+DB" choice for this corpus's size) would need a real ANN index at that scale, a retrieval-
+infrastructure problem distinct from chunking. Proposed LLM-assisted (semantic) chunking as
+the production-standard answer for genuinely large, stylistically diverse corpora — a cheap
+model processing each document once at ingest time to identify clause/exception boundaries
+semantically rather than syntactically — while being explicit about its real costs: it breaks
+`ingest.py`'s current fully-local, no-API-key-required design, introduces a new failure
+surface at precisely the point nobody can manually check it, and raises its own question
+about whether ingest-time chunking should be idempotent given the same lack of `temperature=0`
+that causes query-time nondeterminism. Recommended a two-tier design: sentence-level chunking
+as the free, deterministic baseline, with LLM-assisted chunking reserved for documents where
+automated recall testing — not a human — flags the baseline as insufficient.
+
+**User:** "Yes, lets take a look at this solution. When the LLM is doing the chunking can it
+provide a document showing decision points it made? Also are you recording our conversation
+down, that's a key part of this take home assignment" — the second question is the direct
+cause of this section existing; the first is addressed in the response that follows.
