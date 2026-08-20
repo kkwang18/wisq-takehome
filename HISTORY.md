@@ -279,6 +279,25 @@ boundary. Documented as a third backlog ticket
 negative-but-informative prototype results don't get re-derived by whoever eventually builds
 that tier for real.
 
+## A vector-DB design, verified rather than assumed, then honestly not adopted
+
+Asked whether a free, lightweight vector DB could bring performance or accuracy benefits,
+Claude checked real PyPI wheel data instead of general knowledge and found only Chroma
+actually supports this project's Python 3.9 — FAISS, LanceDB, and Qdrant have all moved to
+3.10+. Designing the schema meant installing Chroma and testing its real API rather than
+writing against assumptions, which caught something that mattered: Chroma's metadata
+filtering excludes records with an absent field by default — the exact bug this project had
+just spent the session fixing in its own retrieval filter. The design was built around that
+(an explicit sentinel value plus an `$or` clause), verified to work with a direct test before
+being written down.
+
+The actual prototype — real corpus, real Chroma, a hand-rolled BM25 pass, Reciprocal Rank
+Fusion — was run against ten queries chosen to include genuinely hard cases, not just easy
+sanity checks. The honest result: no case where hybrid search beat what's already shipped.
+Documented as a fourth backlog ticket rather than implemented, with the full design preserved
+so a future session facing real corpus growth can build from a finished design instead of
+re-deriving it.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

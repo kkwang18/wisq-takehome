@@ -735,3 +735,73 @@ so a future session doesn't have to re-run either experiment, and updated the ex
 absence-inference ticket with a "Retrieval-side update" section clarifying that this fix
 addresses one contributing cause for one query shape, not the underlying `verify_answer`
 weakness itself, which remains open.
+
+## 17. A vector-DB design, verified against the actual library ecosystem and prototyped, not assumed
+
+**User:** "Okay, great now I want to think about how we are handling the vectors. Is there a
+open source vector db we can use for this project? It should be free, lightweight and bring
+either performance benefits or accuracy benefits." Rather than answer from general knowledge
+of the vector-DB landscape, Claude checked real PyPI wheel metadata for FAISS, Chroma,
+LanceDB, and Qdrant — and found something a normal comparison would miss: the top-level
+`requires_python` field on PyPI is misleading for `abi3` wheels (it reflects the last-uploaded
+file, not the union of all wheels), so the real check required inspecting actual wheel
+filenames. Result: only Chroma has a genuine `cp39` wheel; FAISS/LanceDB/Qdrant's latest
+releases all require Python ≥3.10, since this project is still on 3.9 (which reached
+end-of-life the same year). Claude was also honest that neither performance nor accuracy
+benefits were guaranteed at this corpus's size — 97% of latency is Claude API round-trips
+(established earlier), and any accuracy win would need testing, not assuming, the same
+discipline as every other investigation this session.
+
+**User:** "Yes, before you prototype can you show me your proposed design for the vector db.
+Schema, indexing strategy, filtering" — then, mid-turn: "Also a strategy when a document is
+added/modified/deleted." Claude installed Chroma into a throwaway scratch venv first and
+inspected its real, current API via `help()` rather than write against remembered training
+knowledge (the library has changed significantly across versions) — and caught a subtle,
+consequential detail this way: empirically verified that a Chroma metadata field entirely
+*absent* on a record is **excluded** by an equality `where` filter, the exact same
+wrong-direction default `VectorIndex.search()` had before the fix earlier the same day. A
+naive migration would have silently reintroduced the bug this whole session had just spent
+significant effort diagnosing and fixing. Designed around it: an explicit `-1` sentinel for
+evergreen (APAC) documents plus an `$or` clause replicating the fixed semantics — verified
+this actually works via a direct test, not just reasoned about. Also verified empirically
+that Chroma's default distance metric is L2, not cosine (would silently produce different
+rankings than everything validated this session) — must be set explicitly via
+`configuration={"hnsw": {"space": "cosine"}}`. The document-lifecycle design (add/modify/
+delete) was scoped deliberately conservative: keep the current full-rebuild default, but
+shape the schema (stable per-chunk IDs, a `file` metadata key) so incremental upsert/delete
+becomes possible later without a redesign — chosen over a fully incremental design from the
+start, matching the project's established "don't build for hypothetical future
+requirements" discipline.
+
+**User:** "Looks good, make sure to track if this prototype finds a query your current numpy
++ pre-filter setup gets wrong that Chroma + hybrid gets right." Claude checked Chroma's
+native hybrid-search API (`Bm25EmbeddingFunction`, `SparseVectorIndexConfig`) but found it
+newer and less externally documented than the core API — rather than reverse-engineer it
+blind, built hybrid search the transparent, standard way instead: Chroma for dense retrieval
+(exactly matching the just-designed schema), a hand-rolled BM25 pass (no new dependency for a
+throwaway prototype), and Reciprocal Rank Fusion to combine them. Ran a 10-query battery
+against the real 73-chunk corpus, deliberately including adversarial cases beyond simple
+sanity checks: a paraphrase-only query sharing zero keywords with its source text (testing
+dense's strength / BM25's weakness), and the one remaining untested "general rule + exception"
+merged-chunk candidate from the `SCOPE` investigation (`SECTION 8`'s local-law-override
+clause). One test-design bug was caught and fixed along the way — the first "US citizen" case
+was run unfiltered by mistake, producing a misleading MISS across all three systems; corrected
+to use `doc_type="regional_handbook"`, matching how the live agent actually searches.
+
+Final, honest result: **zero cases across all 10 queries where the current system missed and
+hybrid caught it** — `numpy` == Chroma-dense == Chroma-hybrid on every row, with dense
+matching current exactly (confirming the prototype was a faithful replication, not a broken
+comparison producing a false negative by accident). Claude cleaned up fully afterward
+(uninstalled the experimental `chromadb` dependency, removed the scratch venv, confirmed via
+`git status` and the full 43/43 offline suite that no trace was left) before reporting the
+null result.
+
+**User:** "Sounds good lets document this. We can add this as a backlog ticket as a change.
+This is something our system would need to implement if corpus grows. Include your schema,
+indexing, filtering, document lifecycle details in the documentation." Claude wrote
+`docs/backlog/2026-08-20-vector-db-migration-for-scale.md` — the full verified design
+(schema, indexing, filtering with the sentinel fix, lifecycle), the Python-3.9-compatibility
+table, and the prototype's methodology and exact results, explicitly framed as
+ready-to-implement without re-investigation once triggered by real corpus growth — the same
+shape as the LLM-assisted-chunking ticket, and for the same underlying reason: real,
+verified capability, not yet justified by this corpus's current size.

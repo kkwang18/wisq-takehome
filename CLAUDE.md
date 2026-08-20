@@ -167,6 +167,18 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   grows past what syntactic rules can safely assume — see
   `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`. Full investigation, including
   both prototypes' exact results: `TRANSCRIPT.md` § 15.
+- **`VectorIndex` stays plain `numpy`, not a real vector DB — verified live, not assumed.**
+  Following the chunking fix, a full Chroma+hybrid-search prototype was built against the
+  real 73-chunk corpus (dense embeddings identical to today's, plus a hand-rolled BM25 pass
+  fused via Reciprocal Rank Fusion) and run against a 10-query battery deliberately including
+  adversarial cases (a paraphrase-only query with zero shared keywords with its source text;
+  the one remaining untested "general rule + exception" merged-chunk candidate from the
+  `SCOPE` investigation). Result: `numpy` == Chroma-dense == Chroma-hybrid on all 10 — no
+  case where the current system misses and hybrid catches it, at this corpus's current size.
+  Full design (schema, indexing, filtering — including the same `version_year=None`-as-
+  sentinel fix the chunking work required — and document lifecycle) written up as a backlog
+  ticket, ready to implement without re-investigation once the corpus actually grows large
+  enough to need it: `docs/backlog/2026-08-20-vector-db-migration-for-scale.md`.
 
 ## 4. Open questions / known gaps
 
@@ -230,6 +242,13 @@ question → main.py / eval.py → src/agent.py (Claude + search tool loop) → 
   cheaply. Relevant once the corpus grows past what syntactic chunking rules can safely
   assume. Full writeup, including a required decision-log design for auditability at scale:
   `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`.
+- **Migrating `VectorIndex` to a real vector DB (Chroma) is deferred, not implemented** —
+  same shape as the chunking ticket above: designed in full and verified via a live
+  prototype to bring no benefit at this corpus's current size (no measurable performance
+  win over `numpy`; a 10-query hybrid-search battery found zero accuracy wins either).
+  Ready-to-implement design (schema, indexing, filtering, document add/modify/delete
+  lifecycle) plus the Python-3.9-compatibility findings that rule out FAISS/LanceDB/Qdrant
+  without also upgrading Python: `docs/backlog/2026-08-20-vector-db-migration-for-scale.md`.
 
 ## 5. Current status
 
@@ -260,8 +279,13 @@ shipped a narrowly-scoped, manifest-driven version instead (`split_sentences_in_
 plus a `SEARCH_K` 8→10 follow-up raise for the same reason `SEARCH_K` was raised the first
 time. Two chunking prototypes (real-corpus and synthetic) concluded LLM-assisted chunking
 has real value but isn't needed yet for this corpus — deferred as a third backlog ticket
-(`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`). 43 offline tests pass.
-`eval.py` passes 8/8 against the real Claude API (last verified live right after the
-chunking fix — re-run it if handbook content, retrieval logic, or `SYSTEM_PROMPT` changes).
-Nothing currently in progress — the three backlog tickets (two `verify_answer`, one LLM-
-assisted chunking) are the natural next pickups.
+(`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`). That same investigation also
+produced a full vector-DB migration design (schema, indexing, filtering, document lifecycle)
+verified via a live Chroma+hybrid-search prototype to bring no benefit yet either — deferred
+as a fourth backlog ticket (`docs/backlog/2026-08-20-vector-db-migration-for-scale.md`).
+43 offline tests pass. `eval.py` passes 8/8 against the real Claude API (last verified live
+right after the chunking fix — re-run it if handbook content, retrieval logic, or
+`SYSTEM_PROMPT` changes). Nothing currently in progress — the four backlog tickets (two
+`verify_answer`, one LLM-assisted chunking, one vector-DB migration) are the natural next
+pickups, all deferred for the same reason: real, designed, or prototyped, but not yet
+justified by this corpus's current size.
