@@ -221,6 +221,12 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   non-converging model would otherwise call `search_handbooks` indefinitely with no circuit
   breaker on API cost. Set above the highest round count observed live for a legitimately
   thorough multi-hop question (5), so it only trips on genuine non-convergence.
+- **`chunk_document()` raises `ValueError` if `split_sentences_in_sections` names a section
+  that was never seen as a heading.** A typo or a renamed/removed section previously
+  silently no-opped back to paragraph-level chunking instead of erroring — the worst
+  possible failure mode for a manifest setting that exists specifically to fix a real
+  retrieval gap (the SCOPE dilution issue — see decisions above). Now fails loudly at
+  ingest time instead.
 
 ## 4. Open questions / known gaps
 

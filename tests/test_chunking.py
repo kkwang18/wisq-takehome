@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.chunking import chunk_document
 from src.models import DocMeta, Paragraph
 
@@ -134,6 +136,28 @@ def test_chunk_document_splits_sentences_only_in_flagged_sections():
         "Eligible employees in Taiwan are entitled to 12 days of PTO per year. "
         "PTO is requested through the standard tools."
     )
+
+
+def test_chunk_document_raises_when_split_sentences_in_sections_names_a_missing_heading():
+    # A typo'd (or renamed/removed) section name in documents.yaml's
+    # split_sentences_in_sections must fail loudly, not silently no-op back to
+    # paragraph-level chunking — the same failure shape as a typo silently reverting the
+    # SCOPE fix this feature exists for.
+    doc = DocMeta(
+        file="x.docx",
+        doc_type="regional_handbook",
+        jurisdictions=["Taiwan"],
+        version_year=None,
+        display_name="Test Regional Handbook",
+        split_sentences_in_sections=["SCOPEE"],  # typo: real heading below is "SCOPE"
+    )
+    paragraphs = [
+        Paragraph(text="SCOPE", style="Heading2"),
+        Paragraph(text="This handbook applies to employees in Taiwan.", style="FirstParagraph"),
+    ]
+
+    with pytest.raises(ValueError, match="SCOPEE"):
+        chunk_document(paragraphs, doc)
 
 
 def test_chunk_document_still_treats_short_compact_and_heading2_as_headings():
