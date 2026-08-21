@@ -217,6 +217,11 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   as part of the same pass that fixed the numeric-boundary false-positive bug above, since
   both changes touched the same two files.
 
+- **`answer_question`'s tool-use loop is capped at `MAX_TOOL_ITERATIONS = 8`.** A
+  non-converging model would otherwise call `search_handbooks` indefinitely with no circuit
+  breaker on API cost. Set above the highest round count observed live for a legitimately
+  thorough multi-hop question (5), so it only trips on genuine non-convergence.
+
 ## 4. Open questions / known gaps
 
 - **A policy split across consecutive paragraphs under one heading can lose its second
@@ -238,8 +243,6 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   inside `"2014"`, and `"1,000"` inside `"$21,000"` — all silently wrong. Fixed with a
   digit/comma boundary check (see `evals/matching.py`); regression tests in
   `tests/test_matching.py`.
-- **No iteration cap on `answer_question`'s tool-use loop.** A non-converging model could
-  loop indefinitely (unbounded API cost). Deferred as low-risk for this corpus size.
 - **`VerifiedAnswer.rejected_draft` has no reader yet** — written on downgrade, never
   surfaced by `main.py`/`eval.py`. Fine as-is, but if you add a `--debug` flag or similar,
   this is where a rejected draft already lives.

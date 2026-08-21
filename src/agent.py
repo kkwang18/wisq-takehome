@@ -8,6 +8,14 @@ from src.verification import VerifiedAnswer, verify_answer
 
 MODEL = "claude-sonnet-5"
 
+# Safety cap on the tool-use loop: a non-converging model would otherwise call
+# search_handbooks indefinitely, with no circuit breaker on API cost. Real multi-hop
+# questions in this corpus (retrieving the regional policy, the correct-year global policy,
+# and the precedence rules separately) have been observed to need up to 5 rounds live — set
+# generously above that so the cap only trips on genuine non-convergence, not a legitimately
+# thorough question.
+MAX_TOOL_ITERATIONS = 8
+
 SYSTEM_PROMPT = """You are an HR policy assistant answering questions about Acme employee \
 benefits using ONLY the excerpts returned by the search_handbooks tool. Never use outside \
 knowledge about typical PTO or benefits norms, and never guess. This includes named \
@@ -105,8 +113,15 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
     messages = [{"role": "user", "content": question}]
     cited_chunks: list[Chunk] = []
     draft = ""
+    iterations = 0
 
     while True:
+        iterations += 1
+        if iterations > MAX_TOOL_ITERATIONS:
+            return VerifiedAnswer(
+                text="Answer generation required too many tool calls to converge; not returning a partial answer.",
+                grounded=False,
+            )
         response = client.messages.create(
             model=MODEL,
             max_tokens=8000,
