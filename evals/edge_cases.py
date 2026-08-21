@@ -5,6 +5,7 @@ import sys
 
 from ingest import build_index
 from src.agent import answer_question
+from evals.matching import matches
 
 # Entity resolution: one representative case per distinct lexical/semantic mechanism, not
 # per jurisdiction — typo/casing/abbreviation exercise the same retrieval code path
@@ -82,35 +83,6 @@ CATEGORIES = {
 }
 
 
-def _matches(expected, result_text: str, grounded: bool) -> bool:
-    # A list/tuple of conditions means ALL must hold — for a compound question that mixes a
-    # false premise with a genuinely-unanswerable sub-question, a single marker can't tell a
-    # correct answer from one that got the premise right by luck while hallucinating the
-    # other half (see tests/test_edge_cases_matching.py for the live case that exposed this).
-    if isinstance(expected, (list, tuple)):
-        return all(_matches(e, result_text, grounded) for e in expected)
-    lowered = result_text.lower()
-    if expected == "unknown":
-        unknown_markers = [
-            "unknown", "don't have enough information", "do not have enough information",
-            "cannot determine", "can't determine", "no reliable basis", "not enough information",
-            "insufficient information", "unable to confirm", "can't confirm", "cannot confirm",
-            "don't know", "do not know", "cannot answer this question with confidence",
-            "can't answer this question with confidence", "no factual basis",
-            "don't have a factual basis", "do not have a factual basis", "would require guessing",
-            "avoid guessing", "should avoid guessing", "should avoid stating",
-            "nothing on file", "no policy on record", "not on record",
-            "no fixed number",
-        ]
-        return any(marker in lowered for marker in unknown_markers) or not grounded
-    if expected == "hedge":
-        return any(
-            word in lowered
-            for word in ["ambig", "clarif", "which country", "specific country", "unclear", "depends on"]
-        )
-    return expected in result_text
-
-
 def main() -> None:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         sys.exit("ANTHROPIC_API_KEY is not set. Export it before running: export ANTHROPIC_API_KEY=sk-...")
@@ -125,7 +97,7 @@ def main() -> None:
             total += 1
             result = answer_question(question, index)
             print(f"Q: {question}\n{result.text}\n{'-' * 80}")
-            if not _matches(expected, result.text, result.grounded):
+            if not matches(expected, result.text, result.grounded):
                 failures.append((category, question, expected, result.text))
 
     if failures:

@@ -52,26 +52,31 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   `python -m evals.edge_cases` (not `python evals/eval.py`, so `sys.path` resolves
   `ingest`/`src.*` imports the same way `pytest.ini`'s `pythonpath = .` already does for
   tests). Neither is named `test_*.py` nor lives in `tests/`, so `pytest` never runs them.
+  - `evals/matching.py` — shared `matches(expected, result_text, grounded)` used by both
+    eval scripts (extracted from what were two independently-drifting copies — see decisions
+    below). Numeric/currency markers (`"12"`, `"$50"`, `"1,000"`) require non-digit,
+    non-comma characters on both sides, so a marker can't match inside a larger number it
+    isn't actually part of (`"50"` no longer matches inside `"$500"`). `"unknown"`/`"hedge"`
+    markers do substring/keyword matching against the shared `UNKNOWN_MARKERS`/
+    `HEDGE_MARKERS` lists; a list/tuple `expected` requires every element to match (AND
+    semantics, for compound questions — see gaps below).
   - `evals/eval.py` — the 8 take-home example queries against a fresh `build_index`, not the
-    persisted `index/`. `_matches()` does substring/keyword matching against expected
-    markers (`"12"`, `"unknown"`, `"hedge"`, etc.) — see gaps below.
+    persisted `index/`.
   - `evals/edge_cases.py` — sibling to `evals/eval.py`, same pattern, but a much larger
     production-readiness suite: 36 cases across entity resolution, negative space,
     grounding, consistency, and precedence generalization. Kept separate from `eval.py` so
     the take-home's 8-query gate stays fast/cheap — run this one on demand, not on every
-    commit (real API cost: ~36 questions × 3-5 Claude calls each). Its `_matches()`'s marker
-    lists are currently duplicated verbatim from `eval.py`'s (inherited from how each was
-    written, not yet extracted into a shared module) — see gaps below.
+    commit (real API cost: ~36 questions × 3-5 Claude calls each).
 - `tests/` — offline only (real local embeddings, zero API calls, zero mocks).
   `test_retrieval_recall.py` checks real-corpus retrieval quality against the take-home's
   actual queries — this is the regression guard for chunking/embedding/`k` changes.
   `test_retrieval_entity_resolution.py` does the same against lexically-varied queries
   (typos, casing, abbreviations, alternate country names) — the offline half of the
-  `edge_cases.py` production-readiness suite. `test_edge_cases_matching.py` tests
-  `evals/edge_cases.py`'s own `_matches()` function directly — the one place in the test
-  suite that gets automated, zero-cost regression coverage of the *test harness's own
-  correctness*, not just the system under test; add a case here whenever `_matches()`
-  changes, the same way any other logic change gets a test.
+  `edge_cases.py` production-readiness suite. `test_matching.py` tests `evals/matching.py`'s
+  `matches()` function directly — the one place in the test suite that gets automated,
+  zero-cost regression coverage of the *test harness's own correctness*, not just the system
+  under test; add a case here whenever `matches()` changes, the same way any other logic
+  change gets a test.
 - `docs/backlog/` — deferred, fully-investigated tasks a future session can pick up cold:
   root cause, suggested fix, risk, and test plan already written up, not just a one-line
   TODO. Check here before starting new work in case it's already been diagnosed.
@@ -203,6 +208,15 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   ticket, ready to implement without re-investigation once the corpus actually grows large
   enough to need it: `docs/backlog/2026-08-20-vector-db-migration-for-scale.md`.
 
+- **`evals/eval.py` and `evals/edge_cases.py`'s independently-drifting `_matches()` copies
+  were extracted into a shared `evals/matching.py`.** The two copies had already diverged
+  (only `edge_cases.py` supported compound list/tuple assertions; only `eval.py` had two
+  marker strings `edge_cases.py` lacked) — merged as the union of both marker lists (strictly
+  additive, since markers are OR'd for "unknown" detection, so a superset can only catch more
+  real phrasings, never break a case that passed before) rather than picking one side. Done
+  as part of the same pass that fixed the numeric-boundary false-positive bug above, since
+  both changes touched the same two files.
+
 ## 4. Open questions / known gaps
 
 - **A policy split across consecutive paragraphs under one heading can lose its second
@@ -211,13 +225,19 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   addressed *that specific* case by widening `k`, not by merging chunks), a future section
   with the same shape could still rank its continuation paragraph out of the search window.
   Not currently tested for beyond the SCOPE case in `test_retrieval_recall.py`.
-- **`eval.py`'s `_matches()` is a substring/keyword heuristic on free-form model output**,
-  not a semantic check. It was tuned reactively against several live runs' actual phrasing
-  (see `docs/HISTORY.md`/`docs/TRANSCRIPT.md`) and is inherently gameable — a hedge-then-guess answer
-  could plausibly trip an "unknown" marker. Most recently, a correctly-hedged answer phrased
-  as "which **specific** country" slipped past the `"which country"` marker entirely (fixed
-  by adding `"specific country"`). Treat it as a smoke test, not a strict regression gate —
-  expect to keep adding markers as real phrasing varies across live runs.
+- **`evals/matching.py`'s `matches()` is a substring/keyword heuristic on free-form model
+  output**, not a semantic check. It was tuned reactively against several live runs' actual
+  phrasing (see `docs/HISTORY.md`/`docs/TRANSCRIPT.md`) and is inherently gameable for
+  word-based markers — a hedge-then-guess answer could plausibly trip an "unknown" marker.
+  Most recently, a correctly-hedged answer phrased as "which **specific** country" slipped
+  past the `"which country"` marker entirely (fixed by adding `"specific country"`). Treat it
+  as a smoke test, not a strict regression gate for word markers — expect to keep adding
+  markers as real phrasing varies across live runs. Numeric/currency markers no longer have
+  this problem in the same way a live-review pass found and fixed a real false-positive bug:
+  bare substring matching meant `"50"` matched inside `"$500"`, `"12"` inside `"120"`, `"14"`
+  inside `"2014"`, and `"1,000"` inside `"$21,000"` — all silently wrong. Fixed with a
+  digit/comma boundary check (see `evals/matching.py`); regression tests in
+  `tests/test_matching.py`.
 - **No iteration cap on `answer_question`'s tool-use loop.** A non-converging model could
   loop indefinitely (unbounded API cost). Deferred as low-risk for this corpus size.
 - **`VerifiedAnswer.rejected_draft` has no reader yet** — written on downgrade, never
@@ -247,20 +267,7 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   re-tests post-fix were correct with no rejections. `verify_answer`'s own reasoning weakness
   is unchanged and could still surface via other absence-inference shapes; don't treat this
   ticket as resolved.
-- **`_matches()`'s marker lists (`unknown_markers`, hedge words) are duplicated verbatim
-  between `evals/eval.py` and `evals/edge_cases.py`.** Inherited from how each was written,
-  not a deliberate choice. Both files' marker lists have already needed reactive tuning
-  against real live-run phrasing (see the gap above and `docs/HISTORY.md`) — a future fix to
-  one copy that doesn't propagate to the other would silently reintroduce a known class of
-  gap. The two copies have now also **functionally diverged**, not just duplicated: only
-  `edge_cases.py`'s `_matches()` supports a list/tuple `expected` for compound (AND)
-  assertions (added to fix a real false-positive risk — see
-  `tests/test_edge_cases_matching.py` and the case comment on `NEGATIVE_SPACE`'s Taiwan
-  sick-days question), `eval.py`'s does not. Worth extracting into a shared module before a
-  third live-tuning round happens, or before `eval.py` needs a compound assertion of its own
-  and someone has to remember to port the feature, not just the marker list; not urgent
-  enough to block anything today.
-- **Writing a good `_matches()` test case: check whether the question asks more than one
+- **Writing a good `matches()` test case: check whether the question asks more than one
   independent thing.** A single substring/keyword marker only verifies one claim. A question
   bundling two unrelated claims (e.g. "since \[false premise\], what is \[a genuinely
   different, unrelated fact\]?") needs a compound `[marker, marker]` assertion, or the test
