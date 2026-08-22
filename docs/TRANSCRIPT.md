@@ -921,3 +921,80 @@ prove a fix against a rare, roughly 1-in-4-to-1-in-8 event — and documented th
 investigation, evidence, and fix as a fifth backlog ticket
 (`docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`) rather than closing it
 silently, since the fix's effectiveness is plausible but unproven.
+
+## 21. A full review pass, re-sequenced by the user, executed item by item
+
+**User:** "Do a full review pass on the RAG take-home system built so far. Give a
+prioritized analysis of where to improve next. Key areas to focus on Eval matcher rigor,
+chunking, verification logic, code quality. This pass is about correctness and coverage, not
+scope expansion." Claude read every source file and the full offline test suite directly
+(not relying on `CLAUDE.md`'s own accumulated self-description, which could be stale) and
+empirically verified the most important suspected finding before reporting it: ran
+`evals.edge_cases._matches()` directly against constructed inputs and confirmed numeric
+markers matched as bare substrings — `"50"` matched inside `"$500"`, `"12"` inside `"120"`,
+`"14"` inside `"2014"`, `"1,000"` inside `"$21,000"` — a real, demonstrable false-positive
+risk, not a theoretical one. Reported seven prioritized findings (matcher false-positives
+first; the two already-designed `verify_answer` tickets; the missing tool-loop iteration cap;
+the eval-matcher duplication; verdict-parsing fragility; a stale `k=5` default; a missing
+citation cross-check) plus three items correctly left alone at current scope, and
+recommended an execution order.
+
+**User** overrode the proposed sequencing with four explicit changes: (1) bundle the matcher
+fix with the shared-module extraction, since both touch the same two files and doing them
+separately would mean re-touching the files twice; (2) move the 5-minute iteration cap ahead
+of the larger `verify_answer` fix, since more eval volume was about to run through the system
+and the circuit breaker should land first; (3) require the `verify_answer` fix's adversarial
+false-negative tests be written and confirmed *before* shipping, not deferred the way both
+tickets had left it open — "the ticket already flags this as open — don't defer it"; (4) pull
+the P2 typo-validation fix forward into this batch, since it shares the exact "config typo
+silently degrades chunking" shape as the SCOPE fix. "Rest of P2 stays batched for later as
+planned."
+
+Executed in that order, TDD throughout, one commit per item:
+
+1. **Matcher fix + shared-module extraction.** Built `evals/matching.py` with a
+   digit/comma-boundary regex check for numeric markers (`(?<![0-9,])...(?![0-9,])`) and a
+   `matches()` function merging both files' marker lists as their union — additive by
+   construction, since markers are OR'd for "unknown" detection, so no case that passed
+   before could newly fail. Renamed `tests/test_edge_cases_matching.py` to
+   `tests/test_matching.py` (it now tests the shared module, not something
+   `edge_cases`-specific) and added six new regression tests covering the four
+   empirically-confirmed bugs plus boundary edge cases. 55/55 offline. Live verification was
+   blocked mid-task: the API key wasn't available in Claude's Bash shell even after the user
+   ran `! export ANTHROPIC_API_KEY=...`, since that only applies to the user's own terminal,
+   not the separate shell each Bash tool call spawns — flagged honestly rather than skipped
+   silently, and confirmed live (8/8) once the user supplied the key directly in chat.
+2. **Iteration cap.** Added `MAX_TOOL_ITERATIONS = 8` to `src/agent.py`'s tool-use loop, set
+   above the highest round count observed live for a legitimately thorough question (5).
+   TDD'd with a scripted fake-client test proving an always-`tool_use` response gets cut off
+   at exactly the cap, plus a positive test proving a normal short exchange is unaffected.
+   57/57 offline.
+3. **P2-6 typo validation.** `chunk_document()` now raises `ValueError` naming any
+   `split_sentences_in_sections` entry never seen as a real heading, instead of silently
+   reverting to paragraph-level chunking. TDD'd against a typo'd name over a real `SCOPE`
+   heading. 58/58 offline, including the real corpus's own `documents.yaml` build (confirming
+   the new check doesn't false-positive on the real, correctly-spelled `"SCOPE"` entry).
+4. **`verify_answer` fix, adversarial-tested first.** Pulled the real corpus excerpts needed
+   for both tickets' test cases directly from `index/chunks.jsonl` (not invented text) via a
+   quick grep-style script. Wrote one shared addition to `build_verification_prompt` covering
+   both tickets' patterns at once — a specific rule carving itself out of a general fallback,
+   and a general default rule with no specific override — the option both tickets had
+   flagged as worth evaluating but left undecided. Before landing it, wrote a scratch
+   live-probe script (`verify_probe.py`, not committed — a one-off verification pass, not a
+   permanent regression test, matching how this session's other live investigations stayed
+   scratch work) and ran: a pre-fix baseline (4 reps each of the two previously-flaky correct
+   drafts, both landed 4/4 SUPPORTED, consistent with the tickets' own "intermittent, not
+   deterministic" framing rather than contradicting it); then post-fix, the same two correct
+   drafts again (4/4 both) plus six adversarial drafts at 3 reps each — a fabricated number,
+   an inverted-direction draft (deliberately misapplying the wrong rule in each pattern, the
+   sharpest test of whether the fix over-generalized), and an unrelated fabrication, for both
+   the Taiwan (specific-carve-out) and California (general-default) shapes. All 18 adversarial
+   reps stayed correctly UNSUPPORTED. 59/59 offline (including a new prompt-content test),
+   live `evals.eval` 8/8. Updated both backlog tickets' status to fixed, with the fix wording,
+   the adversarial evidence, and an honest caveat that a clean sample cannot prove the
+   false-positive rejection rate is now zero, only that this battery found no
+   over-generalization.
+
+Updated `CLAUDE.md` (decisions, gaps, and status sections) and this transcript incrementally
+as each item landed, per the standing instruction to keep documentation current during the
+work rather than batched at the end.

@@ -1,9 +1,10 @@
 # BACKLOG: `verify_answer` over-rejects correct answers based on absence-inference reasoning
 
-**Status:** Not started on the `verify_answer` fix itself. **Update:** the retrieval-side
-contributor to this pattern's California/US shape has since been addressed — see
-"Retrieval-side update" below. This does not close the ticket; `verify_answer`'s own
-reasoning weakness is unchanged and could still surface via other absence-inference shapes.
+**Status:** Fixed (2026-08-21), together with the sibling precedence ticket, via one shared
+addition to `build_verification_prompt` rather than two separate patches. See "Fix
+implemented" at the bottom for what shipped, the adversarial evidence gathered before landing
+it, and why the retrieval-side update below is a separate, already-addressed contributor to
+one shape of this bug, not the same fix as this ticket's `verify_answer` reasoning fix.
 
 **Discovered:** 2026-08-20, during the initial latency-investigation session (first
 reproduction, "California PTO"), and corroborated again the same day during a
@@ -173,3 +174,47 @@ misattribution before the task was marked complete (see that plan's SDD ledger,
 `.superpowers/sdd/2026-08-20-production-readiness-edge-cases/progress.md`, for the full
 correction). Do not repeat that mistake: the expected answers ("15", "hedge") for these two
 cases in `edge_cases.py` are correct and grounded in the real corpus, not aspirational.
+
+## Fix implemented (2026-08-21)
+
+Root-caused per this ticket's own Test plan item 1 first: direct `verify_answer()` probes
+against the real corpus excerpts (the global handbook's "applies to all Acme personnel
+worldwide... unless a specific provision states otherwise" clause, plus the APAC SCOPE
+clause pointing non-APAC personnel back to the global handbook) confirmed the correct
+draft was being accepted in a small baseline sample (4/4), consistent with this pattern
+being genuinely intermittent rather than a deterministic failure — matching the "roughly
+1-in-3-to-1-in-2" rate this ticket already documented from live sampling, not a
+contradiction of it.
+
+Shipped as the same shared `build_verification_prompt` addition described in the sibling
+precedence ticket (pattern (b) there is this ticket's general-default pattern). The 3-case
+adversarial battery this ticket's "Suggested fix" section requires (a fabricated number, a
+draft that inverts the correct absence-reasoning direction, and a pure-fabrication control)
+was run against the real California/US excerpts, 3 live reps each:
+
+- `california_fabricated_number` ("20 days... per the global handbook"): UNSUPPORTED all 3
+  reps — the verifier correctly cited the real 15-day figure as contradicting it.
+- `california_inverted_direction` ("California employees are not covered by any Acme PTO
+  policy, since no handbook specifically names California"): UNSUPPORTED all 3 reps — this is
+  the sharpest test of the fix's directionality, since it inverts the correct absence
+  reasoning (no specific mention means the general default *does* apply, not that nothing
+  applies) and the fix needed to reject it despite granting more leniency to the *correct*
+  direction of the same inference pattern.
+- `california_unrelated_fabrication` ("25 days... due to a state-mandated top-up"):
+  UNSUPPORTED all 3 reps.
+
+The correct California-PTO draft stayed 4/4 SUPPORTED after the fix (same as the pre-fix
+baseline), so no evidence the fix changed the correct-case acceptance rate in this sample —
+consistent with either a real improvement in a pattern too intermittent for a
+same-day small sample to detect a rate change, or the fix simply not being exercised because
+this batch's baseline was already clean; distinguishing those two would need a much larger
+sample than was practical to run live in one session. Regression: 59/59 offline tests pass,
+`python -m evals.eval` 8/8 live.
+
+**What this does and doesn't resolve:** the false-negative risk this ticket and its sibling
+both flagged before implementation is addressed — the adversarial battery found no case where
+the fix over-generalized. It does not prove the false-*positive* rejection rate is now zero;
+that would need a much larger live sample than was practical here. Watch for a recurrence the
+same way the retrieval-side update below was originally caught: a live report of an
+absence-inference draft (any jurisdiction, any benefit) being wrongly rejected after this fix
+would mean the shared addition needs to be revisited, not that this fix failed outright.

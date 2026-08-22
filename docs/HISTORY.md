@@ -355,6 +355,50 @@ documented the finding — including the honest caveat that a handful of clean r
 cannot statistically prove a fix against a rare event — as a fifth backlog ticket rather than
 silently closing it.
 
+## A full correctness/coverage review, triaged and executed in the sequence the user set
+
+Asked for "a full review pass... prioritized analysis of where to improve next," focused on
+eval matcher rigor, chunking, verification logic, and code quality — correctness and
+coverage, not scope expansion. Read every source file and the full offline test suite
+directly rather than trusting the project's own accumulated documentation of itself, and
+empirically confirmed the top finding before reporting it as a bug rather than a suspicion:
+`evals/eval.py` and `evals/edge_cases.py`'s numeric/currency markers matched as bare
+substrings, so `"50"` matched inside `"$500"`, `"12"` inside `"120"`, `"14"` inside `"2014"`,
+and `"1,000"` inside `"$21,000"` — a hallucinated figure could silently pass an eval expecting
+a different one. Presented seven findings in priority order (matcher false-positives; the two
+already-designed-but-deferred `verify_answer` tickets; the missing tool-loop iteration cap;
+the already-diverging `_matches()` duplication; verdict-parsing fragility; a stale default
+constant; a missing citation cross-check) plus three lower-priority items correctly left
+alone at this project's scope.
+
+The user re-sequenced the triage rather than accepting it as ordered: bundle the matcher fix
+with the shared-module extraction since both touch the same two files; move the 5-minute
+iteration-cap fix ahead of the larger verify_answer fix, since more eval volume was about to
+run through the system and the circuit breaker should land first; require the verify_answer
+fix's adversarial "does this make the verifier too lenient" tests be written and passing
+*before* shipping, not deferred as the tickets themselves had left it; and fold in the
+smaller typo-validation fix (P2-6) since it shared the exact "config typo silently degrades
+behavior" shape as the SCOPE chunking fix. Executed in that exact order, TDD throughout,
+offline-green before each live check, one commit per item.
+
+The `verify_answer` fix closed both previously-open false-rejection tickets at once, using
+the option each had flagged but left unevaluated: a single shared addition to
+`build_verification_prompt` teaching the verifier to credit two mirror-image inference
+patterns (a specific rule carving itself out of a general fallback; a general default rule
+with no specific override) as supported, not unresolved conflicts. Before landing it, pulled
+the real corpus excerpts directly from `index/chunks.jsonl` (not invented text) and ran a
+scratch live-probe script: 4 reps each of the two previously-flaky correct drafts (Taiwan PTO,
+California PTO) both before and after the fix, plus 3 reps each of six adversarial drafts —
+a fabricated number, an inverted-direction draft (the sharpest test: deliberately misapplying
+the *wrong* rule in each pattern), and an unrelated fabrication, for both patterns. All 18
+adversarial reps stayed correctly UNSUPPORTED and both correct drafts stayed 4/4 SUPPORTED,
+resolving the false-negative risk both tickets had explicitly left open before either could
+ship. Hit a real environment snag along the way: the user's `! export ANTHROPIC_API_KEY=...`
+only applied to their own terminal, not the separate shell each Bash tool call spawns, and
+writing the key to a scratchpad file to work around it was blocked by the permission
+classifier — resolved by passing the key inline per live command instead, without persisting
+it to disk anywhere.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

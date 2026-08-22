@@ -228,6 +228,18 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
   retrieval gap (the SCOPE dilution issue — see decisions above). Now fails loudly at
   ingest time instead.
 
+- **`build_verification_prompt` now explicitly credits two inference patterns as
+  supported, not unresolved conflicts:** (a) a specific rule that carves itself out of a
+  general fallback ("for X specifically, rule A applies; for all other cases, rule B
+  applies"), and (b) a general default rule with no specific override ("applies to all
+  cases... unless a specific provision states otherwise"). Fixes both previously-open
+  `verify_answer` false-rejection tickets with one shared addition rather than two patches —
+  see `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md` and
+  `docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md` for the root
+  cause, the exact wording shipped, and the adversarial evidence (18 live reps across 6
+  cases, all correctly still rejected) gathered before landing it to resolve the
+  false-negative risk both tickets had flagged as unresolved.
+
 ## 4. Open questions / known gaps
 
 - **A policy split across consecutive paragraphs under one heading can lose its second
@@ -252,30 +264,6 @@ question → main.py / evals.eval → src/agent.py (Claude + search tool loop) �
 - **`VerifiedAnswer.rejected_draft` has no reader yet** — written on downgrade, never
   surfaced by `main.py`/`eval.py`. Fine as-is, but if you add a `--debug` flag or similar,
   this is where a rejected draft already lives.
-- **`verify_answer` intermittently rejects legitimate correct answers.** Two related but
-  distinct patterns observed, each with its own backlog ticket (cross-linked to each other —
-  consider whether one fix addresses both before implementing either): (a) absence-based
-  inferences ("no regional handbook names California, so the global default applies")
-  sometimes rejected as unsupported — corroborated by two more live reproductions found
-  while building the `edge_cases.py` suite (the "Chinese national in California" and
-  "Japan/US split" cases), written up in
-  `docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md`; and (b)
-  specific-vs-general precedence carve-outs ("for PTO specifically, X takes precedence; for
-  all other benefits, refer to Y") misread as an unresolved conflict between X and Y, even
-  though X explicitly excludes itself from Y's scope — reproduced live on the flagship
-  Taiwan-PTO example question itself, written up in
-  `docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`. Every occurrence so
-  far has correctly *not* produced a wrong answer (the downgrade path just falls back to
-  "can't confirm"), so it costs eval-run reliability, not correctness. Both tickets have a
-  fully written-up fix proposal, root cause, and false-negative-aware test plan — deferred
-  because a false-negative risk (does the fix make the verifier too lenient elsewhere?) was
-  raised and not yet resolved before implementation. Read the relevant ticket before
-  attempting either pattern. Note: pattern (a)'s retrieval-side contributor for the specific
-  "no regional handbook covers X" (California/US) shape has since improved — the `SCOPE`
-  chunking fix (see decisions above) raised the resolving excerpt's rank, and 5/5 live
-  re-tests post-fix were correct with no rejections. `verify_answer`'s own reasoning weakness
-  is unchanged and could still surface via other absence-inference shapes; don't treat this
-  ticket as resolved.
 - **Writing a good `matches()` test case: check whether the question asks more than one
   independent thing.** A single substring/keyword marker only verifies one claim. A question
   bundling two unrelated claims (e.g. "since \[false premise\], what is \[a genuinely
@@ -348,8 +336,20 @@ and shipped a restrictive `SYSTEM_PROMPT` fix (see decisions above) after confir
 regression: 49 offline tests pass, `evals.eval` passes 8/8 live. Documented as a fifth
 backlog ticket rather than closed silently, since 7 clean live reproductions can't prove the
 fix against the rare event it targets:
-`docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`. Nothing currently in
-progress — the five backlog tickets (two `verify_answer`, one LLM-assisted chunking, one
-vector-DB migration, one hallucination finding) are the natural next pickups, four deferred
-because they're real but not yet justified by this corpus's current size, and the fifth
-already fixed but kept open pending stronger confidence in the fix.
+`docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`. A sixth session ran a
+full correctness/coverage review pass (eval matcher rigor, chunking, verification logic,
+code quality) and, in priority order, fixed a real eval-matcher false-positive bug (numeric
+markers matched as bare substrings — `"50"` matched inside `"$500"`, etc. — confirmed
+empirically before fixing), extracted `eval.py`/`edge_cases.py`'s independently-drifted
+`_matches()` copies into a shared `evals/matching.py`, capped `answer_question`'s tool-use
+loop at 8 iterations, closed both open `verify_answer` false-rejection tickets with one
+shared prompt addition (adversarial-tested first: 18 live reps across 6 cases, all correctly
+still rejected, before landing), and made `chunk_document()` fail loudly instead of silently
+no-opping on a typo'd `split_sentences_in_sections` entry. 59 offline tests pass;
+`evals.eval` passes 8/8 live (re-verified twice this session, after the matcher fix and
+again after the verify_answer fix). Remaining backlog: three tickets (LLM-assisted chunking,
+vector-DB migration, the named-entity hallucination finding), all deferred for the reasons
+already stated in each ticket, plus a smaller P2 sweep from this session's review (verdict
+case-sensitivity in `verify_answer`, `VectorIndex.search()`'s stale `k=5` default, no
+deterministic check that a citation tag names an actually-cited document/section) not yet
+scheduled.

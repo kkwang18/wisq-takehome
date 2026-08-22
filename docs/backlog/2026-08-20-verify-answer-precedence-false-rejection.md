@@ -1,8 +1,9 @@
 # BACKLOG: `verify_answer` over-rejects correct specific-vs-general precedence answers
 
-**Status:** Not started — implementation deferred pending a false-negative risk review that
-was raised but not resolved. This ticket exists so a future session can pick up exactly
-where this one stopped, without re-deriving the investigation.
+**Status:** Fixed (2026-08-21), together with the sibling absence-inference ticket below, via
+one shared addition to `build_verification_prompt` rather than two separate patches (the
+option both tickets flagged as worth evaluating). See "Fix implemented" at the bottom for
+what shipped and how the previously-open false-negative risk was resolved before landing it.
 
 **Discovered:** 2026-08-20, live testing during a "production readiness" edge-case
 investigation session.
@@ -185,3 +186,42 @@ space, grounding, consistency, precedence generalization — to be written up as
 being resolved first, but the "Taiwan PTO in 2025" precedence-generalization test case in
 that matrix will exercise this exact code path, so fixing this ticket before or alongside
 that matrix work would avoid a known-flaky test case landing in the new suite.
+
+## Fix implemented (2026-08-21)
+
+Shipped as one shared addition to `build_verification_prompt` (`src/verification.py`)
+covering both this ticket's specific-carve-out pattern and the sibling absence-inference
+ticket's general-default pattern, rather than two incremental patches — the option both
+tickets flagged as worth evaluating before implementing either in isolation:
+
+> "(a) Specific carve-out: when an excerpt states a specific rule for a specific case, and
+> separately states that a different, general rule applies 'for all other' cases, the
+> specific rule is the complete and final answer for its named case — it does not need to be
+> reconciled against the general rule.
+> (b) General default: when an excerpt states a general rule applies to all cases unless a
+> specific provision states otherwise (or equivalent wording), and no other excerpt provides
+> a specific provision covering the case in question, the general rule is the complete and
+> final answer for that case — the absence of a specific override does not itself need to be
+> separately stated in the excerpts to be a valid basis for the conclusion.
+> Both exemptions apply only when the excerpts' own wording makes the case's scope
+> unambiguous — if the excerpts leave genuine doubt about which rule actually covers the case
+> in the draft (not just the existence of a different rule elsewhere), that is a real
+> ambiguity and should still be flagged as UNSUPPORTED."
+
+**The false-negative risk was resolved before landing, per this ticket's own test plan**, by
+running the exact 3-case adversarial battery this ticket specifies (fabricated number,
+inverted precedence direction, unrelated fabrication) directly against `verify_answer()` with
+the real Taiwan cited excerpts, 3 live reps each (9 calls) — every rep stayed UNSUPPORTED,
+including the sharpest directionality test (a draft claiming the global "more generous" rule
+overrides the regional PTO-specific carve-out — the exact inverse of the correct reading).
+The sibling ticket's 3 analogous adversarial cases (California/US shape) were run alongside
+these in the same battery; see that ticket for its own results. The two correct-draft
+positive controls (Taiwan PTO, California PTO) stayed 4/4 SUPPORTED both before and after the
+fix, so no evidence of a new false-negative was found in this sample. Regression: 59/59
+offline tests pass (including a new offline test asserting the guidance text is present in
+`build_verification_prompt`'s output), `python -m evals.eval` 8/8 live.
+
+As with every prior fix in this project, a clean adversarial sample cannot *prove* the fix
+never over-generalizes — it can only fail to find a counterexample in the cases tried. Revisit
+if a live run ever shows `verify_answer` accepting a draft that misapplies a specific-vs-
+general precedence rule.
