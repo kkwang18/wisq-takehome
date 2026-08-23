@@ -118,7 +118,7 @@ flowchart TD
 `python-docx`.
 
 **Why:** `python-docx`'s `Document.paragraphs` only returns top-level body paragraphs and
-silently drops anything nested in a table — and the real handbooks' section headers live
+silently drops anything nested in a table. The real handbooks' section headers live
 inside single-cell "banner" tables, which would have dropped every header in this corpus.
 Walking the raw XML directly visits every paragraph regardless of nesting, so nothing is lost.
 
