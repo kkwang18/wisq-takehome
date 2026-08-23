@@ -1,415 +1,255 @@
-# Build History
+# Build History — index
 
-Curated summary of the decisions, definitions, and course-corrections behind this system.
-The full raw conversation is in `docs/TRANSCRIPT.md`.
+A navigable index into `docs/TRANSCRIPT.md`'s full raw conversation. Each entry below is a
+one-to-three-sentence hook, not a retelling — jump to the cited `§N` in `TRANSCRIPT.md` for
+the real detail (root causes, verbatim evidence, exact fixes). For *why the system is built
+the way it is today* (components, tradeoffs, current tuning), see `docs/DESIGN.md` instead —
+this file is chronological narrative, not current-state reference.
 
 ## The task
 
-Build a Q&A system over three Acme HR documents (`Acme_Employee_Handbook_2025.docx`,
-`Acme_Employee_Handbook_2026.docx`, `APAC_Benefits_Handbook.docx`) that must use retrieval
-(chunk + embed + search) rather than stuffing full documents into every prompt, and must
-answer 8 example queries correctly — including two queries with no clean numeric answer
-(`unknown`, `hedge`).
+Build a Q&A system over three Acme HR documents that must retrieve (chunk + embed + search)
+rather than stuff full documents into every prompt, must never fabricate, and must answer the
+take-home's 8 example queries correctly — including two with no clean numeric answer
+(`unknown`, `hedge`). → `§1`
 
-## Definitions established during brainstorming
+## 1. Brainstorming & design (§1–4)
 
-These are the business rules the system has to apply, extracted from the handbooks' own
-"Conflicts and Precedence" sections, not invented for the test set:
+- **§1 — Reading the brief.** The take-home brief and its 8 example queries were read and
+  the hard cases (version conflict, regional precedence, jurisdiction ambiguity) identified
+  before any design work started.
+- **§2 — Brainstorming.** The six domain rules now pinned in `CLAUDE.md` ("Domain rules the
+  system must preserve") were extracted here from the handbooks' own "Conflicts and
+  Precedence" sections, not invented for the test set. Also where "agentic multi-hop
+  retrieval" (a `search_handbooks` tool Claude calls repeatedly, not single-shot top-k) and "a
+  separate grounding-verification pass" were decided as the concrete mechanisms behind
+  "never fabricate," not just prompt instructions.
+- **§3 — Design presented, a gap caught.** The initial design was presented in chat before
+  any code was written; the user caught a real gap in it before implementation began.
+- **§4 — A working-style instruction.** The user set the standing expectation for this
+  project: strict red/green TDD, YAGNI, DRY — applied throughout every session since.
 
-- **Local wins, but only for PTO.** The APAC Benefits Handbook explicitly claims precedence
-  over the global handbook specifically for PTO, and only PTO — for every other benefit it
-  points back to the global handbook's own precedence rule.
-- **More generous wins, for everything else.** The global handbook's default rule: where
-  policies conflict, the option with the greater monetary value or entitlement applies.
-- **Latest version wins when no year is specified.** Two global handbooks exist (2025, 2026)
-  with different PTO numbers (14 vs 15 days); absent a stated year, the current/latest
-  version applies.
-- **Unknown, not a guess, when data doesn't exist.** A query about 2021 has no matching
-  handbook — none of the provided documents cover a period before 2025 — so the system must
-  say so rather than extrapolate.
-- **Hedge, not a coin flip, when the entity is ambiguous.** "An employee living in Asia" is
-  broader than "China, Japan, or Taiwan" (the APAC handbook's actual scope) — since a
-  non-APAC Asian country would get a different (global-only) answer, the system must flag the
-  ambiguity and ask, not pick one arbitrarily.
-- **No hallucination, ever.** Every claim must be traceable to a retrieved excerpt with a
-  citation; if retrieved excerpts don't support an answer, the system must say so rather than
-  produce a fluent-sounding guess.
+## 2. Spec, plan, and first build (§5–9)
 
-## Architecture decisions
+- **§5 — Writing the spec found real bugs before writing code.** Inspecting the actual
+  `.docx` XML (not trusting assumptions) surfaced two real problems that changed the design:
+  section headers live inside single-cell "banner" tables that `python-docx` silently drops
+  (fixed by reading `word/document.xml` directly, dropping the dependency entirely), and the
+  two document families don't share one heading convention — APAC's `pStyle="Compact"` also
+  appears on 5 real body paragraphs, which a naive heading rule misclassified and dropped.
+- **§6 — Implementation plan.** The spec was broken into 12 concrete tasks before any
+  implementation began.
+- **§7 — Execution.** Built via subagent-driven development. The offline retrieval-recall
+  test suite caught a real near-miss here: the APAC country-scope paragraph ranked 7th of 13
+  for a jurisdiction query, just outside the top-5 cutoff — fixed by raising `k` 5→8, in both
+  the test and the live search tool.
+- **§8 — The whole-branch review found the system had never actually run.** No API key had
+  been available during the build, so the real request shape was untested. The review found
+  two Critical defects: `temperature=0` (Sonnet 5 rejects any non-default sampling param, 400
+  error — the system couldn't answer a single question) and `max_tokens=200` on the
+  verification call (silently starved by default thinking tokens, downgrading every answer).
+- **§9 — The first live run caught a third defect class no static check could.** The
+  "gym benefits in Asia" query sometimes returned a definitive number instead of the required
+  hedge, because the ambiguity rule only fired when different candidate jurisdictions would
+  produce *different* figures — which this query doesn't. Fixed by hedging on the ambiguity
+  itself. The lesson carried forward from §5+§8+§9 together: every defect class in this build
+  was invisible at the layer it was introduced and visible only once something real ran
+  against it — the origin of this project's standing "verify live, multiple reps" discipline.
 
-- **Anthropic API for reasoning, local `sentence-transformers` for embeddings** — no
-  embeddings API needed, no OpenAI dependency.
-- **Agentic multi-hop retrieval**, not single-shot top-k: the questions require resolving a
-  jurisdiction, resolving a document version, and then applying a precedence rule that
-  itself lives in a different part of the document — a single fixed retrieval pass can't
-  anticipate that combination for an arbitrary future question, so Claude gets a
-  `search_handbooks` tool it can call multiple times before answering.
-- **A separate grounding-verification pass** after the draft answer, checking every claim
-  against only the chunks actually retrieved during that conversation — this is the concrete
-  mechanism behind "no hallucination, ever," not just a prompt instruction.
-- **Citations always shown to the end user**, inline in the answer text, not hidden.
-- **Manifest-driven document set** (`documents.yaml`): adding or deprecating a document is a
-  YAML edit plus a re-run of `ingest.py`, no code change.
-- **Ingestion and querying are separate processes**: `ingest.py` builds and persists the
-  index once; `main.py` and `eval.py` just load it, so no embedding-model cost at query time.
+## 3. Post-launch tightening: verbosity, latency, structure (§10–12)
 
-## Real-document surprises that changed the design mid-build
+- **§10 — Verbosity, then a latency fix that broke correctness.** Answers were tightened
+  from padded multi-paragraph responses to 2-4 sentences citing only the determinative
+  excerpts. Investigating ~5-10s latency found a real ~6.2s one-time embedding-model load cost
+  that wasn't overlapping with the first API round-trip (fixed with `preload_model()` on a
+  background thread) — but a second candidate fix (batch tool calls via a prompt nudge) was
+  live-ablated (0/4 failures reverted vs. 2/4 with it in place) and reverted after it was
+  shown to destabilize `verify_answer` on absence-inference questions.
+- **§11 — Prompt caching, investigated and shelved.** A live timing breakdown showed 97% of
+  call time is Claude generation, not input reprocessing — caching would save a small amount
+  of cost, not the latency that motivated the question. Shelved, not implemented.
+- **§12 — The rigid three-part answer structure.** Verdict-first, one reason, one citation —
+  iterated against live reruns until it held reliably, closing two real "reasoning leaks
+  before the verdict" gaps along the way. (This is the structure that later got fully
+  formalized into the `submit_answer` tool — see §23.)
 
-Two things were wrong in the original plan, both caught by inspecting the actual `.docx`
-XML rather than trusting assumptions, and both fixed with evidence, not guesses:
+## 4. Production-readiness & the chunking investigation (§13–16)
 
-1. **The handbooks' section headers live inside single-cell "banner" tables**, not top-level
-   body paragraphs. `python-docx`'s `Document.paragraphs` API silently skips table-nested
-   content, which would have dropped every section header. Fixed by reading
-   `word/document.xml` directly via stdlib `zipfile` + `xml.etree.ElementTree`, dropping the
-   `python-docx` dependency entirely.
-2. **The two documents don't share one heading convention.** The global handbooks use
-   `pStyle="Compact"` for real section headers; the APAC handbook uses `pStyle="Heading2"`.
-   Worse — discovered only after real ingestion — APAC's "LOCAL LAW PROVISIONS" section has
-   5 real body-content paragraphs that *also* carry `pStyle="Compact"`, which the original
-   heading heuristic misclassified as headings and silently discarded. Fixed with a length
-   guard (a paragraph counts as a heading only if it's both short-styled AND short, ≤60
-   characters) rather than per-document special-casing.
+- **§13 — Designing the edge-case test matrix found two real bugs first.** Grounding the
+  test design in the actual retrieved corpus (not assumption) predicted a risk — the
+  evergreen APAC handbook's `version_year=None` could get silently excluded by a
+  year-filtered search — which the user then hit live. Root-caused as **two independent,
+  stacking bugs**, not one: the predicted retrieval bug, and a separate `verify_answer`
+  weakness misreading a valid specific-carve-out inference as unresolved ambiguity. Bug 1
+  fixed immediately (TDD, `version_year=None` now means "matches any year"); Bug 2 written up
+  as a backlog ticket after the user asked the sharp question "could this open up false
+  negatives?"
+- **§14 — The edge-case plan executed.** Bug 1 shipped (`b7411e4`), the 36-case suite built
+  and reviewed. One judgment call worth knowing: an implementer's report mischaracterized 2
+  failures as "corpus limitations" — caught and corrected against the real corpus text before
+  the task was accepted as complete.
+- **§15 — A live nondeterminism report reopened the chunking design.** Running the merged
+  system, the user hit the same question giving a correct answer once and a wrong rejection
+  once. Chasing it found a genuinely new gap: the single most relevant sentence for
+  out-of-APAC PTO questions ranked #19-21 of 71 chunks. Led to a from-scratch chunking-strategy
+  discussion (seven strategies considered) that landed on a two-tier design: deterministic
+  splitting as the free baseline, LLM-assisted chunking reserved for where testing — never
+  manual reading — flags the baseline as insufficient.
+- **§16 — The chunking fix, chased through two failed hypotheses.** A corpus-wide
+  sentence-split looked right and was wrong in practice (regressed a passing test, didn't even
+  improve its target queries). An LLM-semantic-chunking prototype turned out to match plain
+  regex splitting exactly on the case tested. What shipped: a manifest-driven,
+  per-section opt-in (`documents.yaml`'s `split_sentences_in_sections`) scoped to just the one
+  confirmed-broken section, plus a `SEARCH_K` 8→10 follow-up raise for the same reason as the
+  original 5→8 fix.
 
-## A retrieval-ranking near-miss found by the offline recall test
+## 5. Retrieval at scale & project cleanup (§17–19)
 
-The offline retrieval-recall test suite (built specifically to answer the brainstorming
-question "will free-text search alone reliably surface the correct chunk?") caught a real
-near-miss: the APAC handbook's country-scope paragraph (naming China/Japan/Taiwan) ranked
-7th of 13 candidates for a jurisdiction-scoping query, just outside the top-5 cutoff, because
-an adjacent generic continuation paragraph out-ranked it lexically. Root-caused (not
-guessed), then fixed by raising `k` from 5 to 8 — applied both in the test and in the real
-agent's search tool, since the same risk existed in the live system, not just the test.
+- **§17 — A vector-DB design, verified rather than assumed.** Real PyPI wheel data (not
+  general knowledge) showed only Chroma supports this project's Python 3.9. A live prototype
+  (real corpus, real Chroma, hand-rolled BM25 + Reciprocal Rank Fusion) against 10
+  deliberately-hard queries found no case where hybrid search beat what's already shipped —
+  documented as a ready-to-implement backlog ticket instead of adopted.
+- **§18 — Project layout cleanup.** Docs consolidated into `docs/`, eval scripts separated
+  into `evals/` from the `main.py`/`ingest.py` product CLI — every cross-reference (25 across
+  11 files) checked before moving anything.
+- **§19 — A live false positive led to compound test assertions and a test-of-tests.** A
+  `"12"` marker passed against a correct answer for the *wrong* reason — the actual
+  sub-question being tested was never checked. Fixed by adding compound (AND) assertion
+  support to the matcher, plus real offline test coverage of the matcher itself.
 
-## A non-functional system that passed every test — until it actually ran
+## 6. Grounding fixes & a full review pass (§20–21)
 
-No `ANTHROPIC_API_KEY` was available anywhere during the build, so `src/agent.py`'s real API
-request shape was never exercised — only checked for valid syntax and clean imports. The
-final whole-branch review (dispatched on the most capable available model, after all 12
-implementation tasks were individually complete and reviewed) found two Critical defects in
-that request shape, verified against current Claude API documentation before being fixed:
+- **§20 — A live fabrication, caught by the safety net.** A draft claimed the APAC handbook
+  covered "Hong Kong/Singapore" — neither name appears anywhere in the corpus. `verify_answer`
+  correctly rejected it before the user saw it. Root-caused as draft-time entity hallucination
+  (a different bug shape from the two open `verify_answer` tickets — this was never retrieved
+  at all, not misread after retrieval). Fixed with a restrictive `SYSTEM_PROMPT` addition;
+  documented as a backlog ticket anyway since 7 clean reproductions can't statistically prove
+  a fix against a rare event.
+- **§21 — A full review pass, re-sequenced by the user.** Found and fixed, in the order the
+  user set (not the order proposed): a real eval-matcher false-positive bug (`"50"` matching
+  inside `"$500"`), the shared `evals/matching.py` extraction, the tool-loop iteration cap,
+  and — closing both previously-open `verify_answer` tickets at once — a shared
+  `build_verification_prompt` addition, adversarially tested (18 live reps, 6 cases) before
+  shipping.
 
-1. `temperature=0` on every API call — Claude Sonnet 5 rejects any non-default sampling
-   parameter with an HTTP 400. The system could not answer a single question.
-2. `max_tokens=200` on the grounding-verification call — Sonnet 5 runs adaptive thinking by
-   default, and thinking tokens count against the same `max_tokens` ceiling as the response
-   text, so this call would very likely return empty text — downgrading every answer,
-   including fully correct ones, to the ungrounded fallback.
+## 7. Answer formatting & verification reliability (§22–24)
 
-Once the user provided a real API key and the system could finally run, a *third* class of
-defect surfaced that no unit test, offline recall test, or static review could have caught:
-the "gym benefits in Asia" query sometimes returned a definitive number instead of the hedge
-the take-home's own expected answer calls for, because the system prompt's ambiguity rule
-only triggered when different candidate jurisdictions would produce different final figures
-— which this query doesn't (the number converges to $50 regardless of the specific country).
-Fixed by broadening the hedge trigger to fire on the ambiguity itself, not just on whether it
-would change the number.
+- **§22 — A formatting-inconsistency report → a plain-prose, compound-question rule.** The
+  same compound question came back as a bulleted list in one run, flowing prose in another —
+  `SYSTEM_PROMPT`'s structure was written for one verdict, with no rule for a question
+  bundling several. The user chose plain prose over bullets, weighing scannability against
+  bullets' own real downsides (verdict-first per-bullet, ambiguous citation granularity, list
+  framing inviting intro/outro creep).
+- **§23 — Plain prose still wasn't guaranteed apart → the `submit_answer` tool.** A prompt
+  instruction can't guarantee layout the model has no structural boundary for. Fixed by moving
+  formatting out of the model entirely: three separate tool fields (`verdict`/`reason`/
+  `citation`) plus a pure, offline-testable `format_answer()` that assembles them
+  deterministically. The user's approval question — does forcing three rigid fields fit every
+  answer shape? — is worth reading in full; the answer is that the fields enforce the same
+  contract that already existed, they don't add a new one.
+- **§24 — A ticket written for review, then implemented.** The user asked for a backlog
+  ticket *before* any fix to the `verify_answer` prefix-parsing bug (a verifier that reasoned
+  aloud and only reached "SUPPORTED" at the end tripped a `.startswith("SUPPORTED")` check).
+  Same fix pattern as §23: an enum-constrained `report_verification` tool instead of free-text
+  parsing. The user made three scoping calls worth knowing if this pattern recurs: skip
+  measuring an occurrence rate when the fix is worth shipping regardless of it, resolve an
+  open hypothesis-thread explicitly once a fix makes it moot rather than leaving it dangling,
+  and cross-reference a second finding (the eval matcher's `grounded`-blind-spot) instead of
+  scope-creeping the fix to cover it.
 
-All three defect classes found during this build — the two document-parsing/chunking bugs
-found by real ingestion, the retrieval-ranking near-miss found by the real-corpus recall
-suite, and these API-shape and hedging-behavior bugs found only by actually calling the real
-model — share one thing in common: every one of them was invisible at the scope where it was
-introduced, and became visible only when something real was executed against it. This is the
-practical argument for "run real things against real data" as a development discipline, not
-just a slogan: three separate defect classes, three separate layers of the system, one
-consistent method for catching all of them.
+## 8. Documentation restructuring (§25–26)
 
-## A follow-up session: tightening verbosity, then chasing latency
+- **§25 — `docs/DESIGN.md` written.** An as-built architecture doc for engineers picking up
+  this repo cold: repo map, a step-by-step "life of a query" trace, mermaid diagrams, six
+  components each with real file/line references and the rejected alternatives that shaped
+  them, and a 7-item scale roadmap ranked by actual trigger condition, not backlog age.
+  Published as an artifact; `README.md` repointed to it as the primary design reference.
+- **§26 — `CLAUDE.md` compressed; `HISTORY.md` rebuilt as this index.** `CLAUDE.md` cut from
+  486 to 94 lines — orientation, the six domain rules as an explicit correctness contract,
+  operating rules, and gotchas that would actually bite a fresh session, with everything else
+  pointed at `DESIGN.md`/`TRANSCRIPT.md`/`backlog/`. `HISTORY.md` rebuilt from a second,
+  slightly-shorter narrative into the genuine index you're reading now.
 
-A later session picked up two separate requests, in order.
+## 9. Closing five flagged gaps (§27)
 
-**Verbosity.** Live answers were substantively correct but padded — multi-paragraph,
-citing every chunk touched during multi-hop search rather than the ones that actually
-decided the answer, and narrating caveats (statutory minimums, other jurisdictions) the
-question never raised. Fixed entirely in `SYSTEM_PROMPT` (target 2-4 sentences, cite only
-the 1-2 determinative excerpts, only raise a caveat the retrieved text makes relevant, don't
-undercut a hedge by revealing the answer under every branch). Retrieval, precedence logic,
-and `verify_answer` were deliberately left untouched. Re-verified live: 8/8.
+- **§27 — Two fixes, two confirmations, one new finding.** A batched closure of five
+  flagged items: fixed `evals/matching.py`'s `grounded`-blind-spot (numeric/hedge markers now
+  require `grounded=True`); fixed the Asia-gym hedge that revealed both branches' figures
+  (took two live-tested rounds, same shape as the earlier verdict-ordering fix); a systematic
+  corpus grep for `SCOPE`-shaped exception language found no second latent chunking bug (every
+  candidate ranks top-3 of 25); live-tested precedence beyond two-rule conflicts (a genuine
+  3-layer chain, an entirely-absent benefit type) with no bugs found; and shipped a batched P2
+  sweep (case-insensitive verdict check, `SEARCH_K`-matching default, a deterministic
+  citation-name cross-check). Stress-testing the hedge fix surfaced a real, unrelated
+  `verify_answer` weakness — over-generalizing one benefit's specific carve-out into false
+  suspicion of a sibling benefit the same excerpt explicitly doesn't carve out — written up as
+  a new ticket rather than fixed inline. A full `edge_cases.py` refresh (32/36) diagnosed every
+  failure individually: one stale test expectation (now commented, not "fixed" by weakening
+  the anti-hallucination guardrail), one recurrence of an already-known, already-flagged
+  `verify_answer` intermittency (logged against that ticket), one genuine eval-matcher gap
+  (fixed), and one more data point for the new carve-out ticket.
 
-**Latency.** Asked to explain and improve the reported 5-10s per answer, Claude measured
-rather than guessed: importing `sentence_transformers` costs ~3.35s and instantiating the
-`SentenceTransformer` model costs ~2.81s — a ~6.2s one-time cost per process, which the code
-was paying *after* the first Claude round-trip (the model only loaded lazily on the first
-`search_handbooks` tool call) instead of overlapping with it. Two candidate fixes were
-proposed: preload the model on a background thread (no behavior change, pure concurrency),
-and nudge the system prompt to have Claude batch multiple `search_handbooks` calls into one
-turn instead of one at a time (fewer sequential API round-trips).
+## 10. A nondeterminism report, root-caused precisely instead of re-patched (§28)
 
-The first live re-run after implementing both surfaced a real regression: the no-year
-"California PTO" query — which had passed cleanly in every prior live run this session —
-failed 1 of 4 further trials, downgraded by `verify_answer` as unsupported. The failing
-draft was making a legitimate inference from *absence* ("no regional handbook names
-California, so the global default applies"), which the verifier sometimes accepted and
-sometimes didn't. Rather than assume it was pre-existing model flakiness, Claude ran a live
-ablation: same query, same code, only the batching-hint sentence toggled. **0 of 4 failures
-with the hint reverted vs. 2 of 4 with it in place** — strong evidence the hint itself was
-the cause, most likely because it made Claude treat one batched round of searches as a
-stopping signal, which shows up as a terser, less-scaffolded draft that the verifier is
-pickier about. The hint was reverted; `preload_model()` was kept, since it doesn't touch
-answer content at all.
+- **§28 — "Probe this system carefully" instead of accepting a retry band-aid.** The user
+  reported the flagship take-home query nondeterministically failing and pushed back hard on
+  a first-pass retry proposal ("still leaves the possibility of returning an incorrect
+  answer... probe this system carefully"). A live instrumentation probe (8 reps, logging
+  every search call) ruled out retrieval variance — the decisive excerpt was cited every
+  time — and the actual mechanism turned out to be visible directly in the user's own pasted
+  rejection text: the verifier stated the fact that proves the claim, then declined to draw
+  the one-step conclusion, because that excerpt's wording didn't match either of the two
+  existing credited inference patterns. Fixed with a third pattern, "closed-list exclusion,"
+  adversarially tested (6/6 correct-draft reps now `SUPPORTED`, 9/9 controls stayed correctly
+  `UNSUPPORTED`) before shipping. Also flagged a real skill-selection mismatch along the way:
+  the user's follow-up `/subagent-driven-development` invocation needs a written plan and
+  independent tasks, and this was one cohesive fix with neither — routed back to direct TDD
+  implementation instead of force-fitting the heavier process.
 
-A final confirmation run then failed differently — the "gym benefits in Asia" query hedged
-correctly ("Could you tell me which specific country you're in...") but `eval.py`'s
-`_matches()` only checked for the literal substring `"which country"`, not `"which specific
-country"`, so a properly-hedged answer slipped past every marker. This is the same class of
-matcher brittleness documented from the original build (see below); fixed by adding
-`"specific country"` to the hedge marker list. A subsequent live run: 8/8.
+## 11. Final readability/cleanliness pass and wrap-up (§29)
 
-**Takeaway carried forward:** the same "run real things against real data" discipline that
-caught defects during the original build caught a real one here too — a plausible-sounding
-latency fix (batch the tool calls) turned out to measurably destabilize a correctness
-guarantee, and the only way that surfaced was running the actual eval against the actual
-API repeatedly, not reasoning about the prompt change in the abstract.
+- **§29 — A five-item final pass caught real doc drift a read-through would have missed.**
+  Systematic (grep/AST-based, not just eyeballed) checks found the codebase itself already
+  clean — one missing type hint was the only real finding. The docs were a different story:
+  `DESIGN.md` still described `CLAUDE.md` as "the complete decision log" in four places, true
+  before the `CLAUDE.md` compression two sessions ago but false since; every `src/agent.py`/
+  `src/verification.py` line-number citation in `DESIGN.md` had drifted from two sessions of
+  fixes growing those files. Also found the README's section order implied a stricter
+  run-order dependency than actually exists (`pytest` and both `evals/` scripts build their
+  own index in memory — only `main.py` needs `python ingest.py` first). All fixed; 80/80
+  offline + `evals.eval` 8/8 live reconfirmed after every edit landed.
 
-**Prompt caching, investigated and shelved.** Asked whether prompt caching was worth adding,
-Claude measured rather than estimated: a live timing breakdown of one multi-hop question
-(via temporary instrumentation in `answer_question()`, reverted after) showed 97% of the
-~9.5s call time is Claude API round-trip time dominated by thinking/generation, and the real
-`count_tokens` endpoint showed the static `SYSTEM_PROMPT` alone (934 tokens) falls *under*
-Sonnet 5's 1024-token cache minimum — only the system prompt plus the `search_handbooks`
-tool definition together (1501 tokens) clears it. Verdict: caching would save a real but
-small amount of cost, not the latency that motivated the original investigation, since the
-cacheable prefix is small relative to total call time and `verify_answer`'s call sends no
-system/tools at all. Shelved for now. (Full breakdown: `docs/TRANSCRIPT.md` § 11.)
+## 12. A ticket recurrence, then systematic-debugging confirms root cause but can't retrigger it (§30)
 
-**A rigid three-part answer structure, iterated live.** Asked to enforce a fixed
-"text-from-HR" shape — verdict, then one reason, then a trailing citation tag, no
-exceptions — Claude rewrote `SYSTEM_PROMPT` and, having learned from the batching-hint
-incident above that a prompt-phrasing change can look right and still misbehave live,
-re-verified against `eval.py` after every revision instead of once. Three real gaps surfaced
-and were fixed in turn: reasoning leaking before the verdict on "no regional handbook
-covers X" answers (fixed with an explicit example), the same leak recurring for "no
-matching year" answers (fixed by generalizing the rule to absence in general, not just the
-regional-handbook case), and an `eval.py` matcher gap for the phrase "nothing on file" (same
-recurring matcher-brittleness class as before). Final live run: 8/8, with verdict-first
-holding in 7 of 8 responses — the one residual violation had been clean on the identical
-query in a prior run, which reads as model sampling variance rather than a rule gap, and
-Claude stopped there rather than chase a variance floor no `temperature` control can reduce
-on this model. Also surfaced, incidentally: the Asia-gym hedge still explains both branches'
-outcomes, the same undercutting pattern the verbosity-tightening task above tried to close —
-flagged, not fixed, since it's outside this task's scope. (Full detail: `docs/TRANSCRIPT.md`
-§ 12.)
-
-## Production-readiness edge cases: designing the test matrix found two real bugs first
-
-Asked to design tests for five production-readiness categories (entity resolution, negative
-space, grounding, consistency, precedence generalization) before implementing them, Claude
-grounded the design in the actual document content (read every chunk in
-`index/chunks.jsonl`) rather than assumption, and flagged one risk while doing so: the APAC
-regional handbook's `version_year=None` (undated, since it has no yearly editions) could get
-silently excluded by a year-filtered search on a question naming both a region and a year —
-e.g. "Taiwan PTO in 2025."
-
-The user tested that exact question themselves and hit a rejected answer. Reproducing it
-live with debug instrumentation revealed **two independent, stacking bugs** on the flagship
-example query, not one: (1) the predicted retrieval bug — a year filter applied to a
-regional-scoped search excluding the APAC precedence clause, which at least once caused a
-genuinely wrong draft (14 days instead of 12) — and (2) a separate `verify_answer` weakness,
-visible in the user's own run: a *correct* draft (12 days) rejected because the verifier
-misread an explicit "for PTO specifically, X takes precedence; for all other benefits, refer
-to Y" carve-out as unresolved ambiguity between X and Y.
-
-Bug 1 was fixed via TDD (`VectorIndex.search()` now treats `version_year=None` as "matches
-any year," not "matches only no filter") — 36/36 offline, live reproduction went from mixed
-correctness to 3/4 correct with the remaining failure confirmed as Bug 2, full `eval.py`
-8/8. Committed separately as its own change.
-
-Bug 2's fix was proposed, then the user asked a sharp question: **"Could this open up the
-change for false negatives?"** — correctly identifying that re-testing the flagship query
-only checks whether wrongly-rejected-correct-answers go down, not whether the same
-leniency-granting instruction makes the verifier miss genuinely wrong answers elsewhere.
-Rather than implement against an unresolved risk, the fix (with a tightened boundary clause)
-and a concrete adversarial test plan — three deliberately wrong drafts designed to catch a
-false-negative regression, including one that's the exact directional inverse of the fix's
-own claim — were written up as a backlog ticket instead:
-`docs/backlog/2026-08-20-verify-answer-precedence-false-rejection.md`. Full root cause,
-verbatim rejection quotes, suggested fix, and test plan are there for a future session to
-pick up without re-deriving the investigation.
-
-## The edge-case plan executed, and a live nondeterminism report reopened the chunking design
-
-The two-task plan above was executed via subagent-driven development in an isolated
-worktree: Bug 1 fixed via TDD (`b7411e4`), Bug 2 deferred as a second backlog ticket, then
-the edge-case suite itself built and reviewed. The one real judgment call during execution:
-Task 2's implementer live-tested 34/36 cases correctly but mischaracterized 2 of the 3
-failures as "corpus limitations" — Claude caught this against the real corpus text before
-trusting the report, ruled the test cases correct as written, and had the commit
-message/report corrected rather than the code. Final whole-branch review clean; merged to
-`main`.
-
-Running the merged system directly, the user hit the predicted class of bug live — the same
-question, twice, gave a correct answer once and a wrong rejection once. Explaining why
-("I thought this was reading from vectors, which should be deterministic?") led to
-distinguishing the fully-deterministic embedding-search layer from the sampled LLM layers
-wrapped around it — and, chasing "could chunking help," to a genuinely new finding: the
-single most relevant sentence for out-of-APAC PTO questions ranks **#19-21 of 71 chunks**,
-which revises the earlier absence-inference ticket's root cause (it isn't purely a verifier
-problem for this pattern; retrieval is also implicated). A chunking-strategy discussion
-followed the same pattern as the rest of this project — every claim tested, not assumed —
-covering seven strategies, a real constraint ("I'm not allowed to look at the documents"),
-its reversal, and finally scaling the question to "hundreds or thousands of documents,"
-which is where the discussion landed on a two-tier design: deterministic sentence-level
-chunking as the free baseline, LLM-assisted semantic chunking reserved for where automated
-recall testing (never manual reading) flags the baseline as insufficient.
-
-## A chunking fix, chased through two failed hypotheses to a scoped, shipped one
-
-Investigating the live nondeterminism report meant actually testing chunking strategies,
-not just discussing them. The first attempt — sentence-level splitting applied corpus-wide —
-looked right in theory and was wrong in practice on two counts: it regressed an
-already-passing retrieval test, and it didn't even improve the queries it was built to fix
-(their rank got worse, not better). Reverted rather than defended.
-
-The second attempt tested whether an LLM could do semantically better than mechanical
-splitting. It produced a working result, but a careful check showed the LLM's actual
-chunking decisions were identical to what a regex would have produced — the improvement came
-from scoping the change to 2 paragraphs instead of 71, not from any semantic intelligence. A
-third, synthetic test then cleanly demonstrated the LLM's real differentiating capability
-(splitting a sentence with no internal punctuation) — real, just not needed anywhere in this
-specific corpus today, since checking two other real candidates for that capability found
-both already retrieved correctly.
-
-The fix that shipped: a manifest-driven, per-section opt-in for sentence-level splitting
-(`documents.yaml`'s `split_sentences_in_sections`), applied to just the one confirmed-broken
-section. This surfaced one more instance of an already-seen pattern — splitting grew the
-regional handbook's chunk count enough to create a new near-tie for a different chunk, fixed
-by raising `SEARCH_K` 8→10, the same move as the original 5→8 fix, now recurring at a new
-boundary. Documented as a third backlog ticket
-(`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`), specifically so the two
-negative-but-informative prototype results don't get re-derived by whoever eventually builds
-that tier for real.
-
-## A vector-DB design, verified rather than assumed, then honestly not adopted
-
-Asked whether a free, lightweight vector DB could bring performance or accuracy benefits,
-Claude checked real PyPI wheel data instead of general knowledge and found only Chroma
-actually supports this project's Python 3.9 — FAISS, LanceDB, and Qdrant have all moved to
-3.10+. Designing the schema meant installing Chroma and testing its real API rather than
-writing against assumptions, which caught something that mattered: Chroma's metadata
-filtering excludes records with an absent field by default — the exact bug this project had
-just spent the session fixing in its own retrieval filter. The design was built around that
-(an explicit sentinel value plus an `$or` clause), verified to work with a direct test before
-being written down.
-
-The actual prototype — real corpus, real Chroma, a hand-rolled BM25 pass, Reciprocal Rank
-Fusion — was run against ten queries chosen to include genuinely hard cases, not just easy
-sanity checks. The honest result: no case where hybrid search beat what's already shipped.
-Documented as a fourth backlog ticket rather than implemented, with the full design preserved
-so a future session facing real corpus growth can build from a finished design instead of
-re-deriving it.
-
-## A project layout cleanup, and a live false positive that led to compound test assertions
-
-Asked to organize the project ("we have a docs dir but transcript.md and others are roaming
-outside"), Claude surveyed every cross-reference before moving anything (25 occurrences
-across 11 files), moved `HISTORY.md`/`TRANSCRIPT.md` into `docs/` and `eval.py`/`edge_cases.py`
-into a new `evals/` package (separated from the `main.py`/`ingest.py` product CLI), and fixed
-every live reference — while deliberately leaving historical/planning artifacts and past-tense
-narrative mentions of literal commands untouched, the same principle applied throughout this
-project's own documentation practice. Verified the riskiest part (would the moved scripts'
-imports still resolve?) before trusting it, at zero live cost. Found and fixed two unrelated
-staleness bugs along the way: a dangling reference to a path that was never actually tracked
-in git, and a stale `SEARCH_K` value in `CLAUDE.md`.
-
-Then a user-reported live response exposed a real weakness in the test suite itself: a
-`edge_cases.py` case expecting the substring `"12"` passed against a *correct* answer, but for
-the wrong reason — the marker only matched because an unrelated part of the answer happened to
-restate the number, while the actual question being tested (a genuinely separate, unrelated
-sick-days sub-question) was never checked at all. Confirmed precisely by running `_matches()`
-against the real pasted response rather than reasoning abstractly, then fixed via TDD: extended
-the matcher to support compound (AND) assertions, added a missing marker (found the same way —
-by checking, not assuming, that a naive fix would have worked), and — since the matching logic
-itself had never had test coverage — added real, offline, zero-cost tests for the test harness's
-own correctness, including an adversarial case proving the fix actually discriminates a
-hallucinated answer from a correct one, not just that it passes the one example in hand.
-
-## A live fabrication, caught by the safety net, root-caused, and closed with a restrictive fix
-
-A user-reported live run showed `verify_answer` rejecting a draft that had, in its own text,
-claimed the APAC Benefits Handbook's jurisdictions were "Hong Kong/Singapore/etc. type
-jurisdictions." Checked directly against `index/chunks.jsonl` rather than assumed: neither
-name appears anywhere in the corpus — the APAC handbook covers only China, Japan, and Taiwan.
-This was a genuinely different bug shape from the two open `verify_answer` tickets, which are
-both about the verifier misreading excerpts that *were* retrieved; here, the draft-generation
-step invented named entities that were never retrieved at all, and the verifier correctly
-caught it before the user ever saw it.
-
-Reproduced the exact question live seven times across the investigation (three before any
-change, four after) using temporary debug instrumentation that printed each search call and
-raw draft — reverted cleanly afterward, checking `git diff --stat` each time to confirm only
-the debug lines were dirty before reverting. All seven reproductions came back correct and
-properly grounded; the fabrication was never reproduced outside the user's original report,
-consistent with a rare (roughly 1-in-4 to 1-in-8, by rough count) stochastic event rather than
-a deterministic bug. Hypothesis: pretrained/outside knowledge of "typical APAC hubs" leaking
-through on named entities specifically, despite an existing instruction against outside
-knowledge that was scoped to figures/norms and didn't explicitly cover entity names.
-
-Presented the user two options — log the finding as a ticket only, or also add a restrictive
-prompt instruction now — with the explicit reasoning that, unlike the two existing
-`verify_answer` tickets (where adding leniency carries real false-negative risk), a stricter
-draft-time grounding instruction only makes the model more conservative, with no symmetric
-downside. User chose to implement the fix now. Added an explicit instruction to
-`SYSTEM_PROMPT` prohibiting any named entity not verbatim in a retrieved excerpt, re-ran the
-full offline suite (49/49) and the live acceptance script (8/8) to confirm no regression, and
-documented the finding — including the honest caveat that a handful of clean reproductions
-cannot statistically prove a fix against a rare event — as a fifth backlog ticket rather than
-silently closing it.
-
-## A full correctness/coverage review, triaged and executed in the sequence the user set
-
-Asked for "a full review pass... prioritized analysis of where to improve next," focused on
-eval matcher rigor, chunking, verification logic, and code quality — correctness and
-coverage, not scope expansion. Read every source file and the full offline test suite
-directly rather than trusting the project's own accumulated documentation of itself, and
-empirically confirmed the top finding before reporting it as a bug rather than a suspicion:
-`evals/eval.py` and `evals/edge_cases.py`'s numeric/currency markers matched as bare
-substrings, so `"50"` matched inside `"$500"`, `"12"` inside `"120"`, `"14"` inside `"2014"`,
-and `"1,000"` inside `"$21,000"` — a hallucinated figure could silently pass an eval expecting
-a different one. Presented seven findings in priority order (matcher false-positives; the two
-already-designed-but-deferred `verify_answer` tickets; the missing tool-loop iteration cap;
-the already-diverging `_matches()` duplication; verdict-parsing fragility; a stale default
-constant; a missing citation cross-check) plus three lower-priority items correctly left
-alone at this project's scope.
-
-The user re-sequenced the triage rather than accepting it as ordered: bundle the matcher fix
-with the shared-module extraction since both touch the same two files; move the 5-minute
-iteration-cap fix ahead of the larger verify_answer fix, since more eval volume was about to
-run through the system and the circuit breaker should land first; require the verify_answer
-fix's adversarial "does this make the verifier too lenient" tests be written and passing
-*before* shipping, not deferred as the tickets themselves had left it; and fold in the
-smaller typo-validation fix (P2-6) since it shared the exact "config typo silently degrades
-behavior" shape as the SCOPE chunking fix. Executed in that exact order, TDD throughout,
-offline-green before each live check, one commit per item.
-
-The `verify_answer` fix closed both previously-open false-rejection tickets at once, using
-the option each had flagged but left unevaluated: a single shared addition to
-`build_verification_prompt` teaching the verifier to credit two mirror-image inference
-patterns (a specific rule carving itself out of a general fallback; a general default rule
-with no specific override) as supported, not unresolved conflicts. Before landing it, pulled
-the real corpus excerpts directly from `index/chunks.jsonl` (not invented text) and ran a
-scratch live-probe script: 4 reps each of the two previously-flaky correct drafts (Taiwan PTO,
-California PTO) both before and after the fix, plus 3 reps each of six adversarial drafts —
-a fabricated number, an inverted-direction draft (the sharpest test: deliberately misapplying
-the *wrong* rule in each pattern), and an unrelated fabrication, for both patterns. All 18
-adversarial reps stayed correctly UNSUPPORTED and both correct drafts stayed 4/4 SUPPORTED,
-resolving the false-negative risk both tickets had explicitly left open before either could
-ship. Hit a real environment snag along the way: the user's `! export ANTHROPIC_API_KEY=...`
-only applied to their own terminal, not the separate shell each Bash tool call spawns, and
-writing the key to a scratchpad file to work around it was blocked by the permission
-classifier — resolved by passing the key inline per live command instead, without persisting
-it to disk anywhere.
+- **§30 — `edge_cases.py` re-run (31/36) surfaced a real ticket mix-up worth correcting live.**
+  Diagnosing all 5 failures individually (not just reporting the count) found one that matched
+  the *closed* precedence-false-rejection ticket's pattern, not the *open*
+  carve-out-overgeneralization ticket flagged moments earlier — corrected this precisely when
+  asked "is this still the verifier bug?" rather than letting an imprecise label stand. The
+  resulting picture: three of the four `verify_answer` tickets now show live recurrence;
+  only the one fix that's structural (an enum-constrained tool call) instead of a free-text
+  prompt instruction has zero recurrences.
+- **`superpowers:systematic-debugging` on the carve-out ticket:** 44 live reps across two
+  methodologies (isolated `verify_answer()` probes with/without pattern (a)'s text, and full
+  end-to-end reproduction with search-call instrumentation) could not re-trigger the ticket's
+  original failure shape — instead surfacing two *different* phenomena (a citation-year
+  attribution slip; a second recurrence of an already-logged draft-side confusion). Re-reading
+  the original two captured rejections against this new evidence confirmed the root cause
+  analytically anyway — both self-describe the over-broad pattern-(a) analogy in their own
+  reasoning text. Reported this nuanced state (root cause understood, no fresh reproducible
+  trigger to test a fix against) rather than overclaiming either a clean reproduction or a
+  ready fix. **User decision: hold — no code change for this ticket**, document the findings
+  instead. Updated the ticket, `CLAUDE.md`, and `DESIGN.md` accordingly.
 
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →
 subagent-driven execution (fresh implementer + fresh reviewer per task, true red/green TDD,
-YAGNI, DRY — explicit user instruction, applied throughout) → final whole-branch review →
-live acceptance run against the real Claude API (all 8 example queries from the take-home
-pass). Every non-trivial judgment call made during execution — the two chunking-heuristic
-fixes, the retrieval-k fix, the final review's API-shape fixes, and the live-run hedging fix
-above — was recorded with its reasoning in an SDD ledger at
-`.superpowers/sdd/2026-08-19-rag-qa-system/progress.md` during the build. That path is a
-local, git-ignored workspace (per `superpowers:subagent-driven-development`'s own convention
-— the workspace is deleted once a plan lands, since "the git history is the record now") and
-was never committed; a fresh clone won't have it. The commits and this summary are the
-permanent record.
+YAGNI, DRY) → final whole-branch review → live acceptance run. Every non-trivial judgment
+call during the original build was recorded in an SDD ledger at
+`.superpowers/sdd/2026-08-19-rag-qa-system/progress.md` — a local, git-ignored workspace
+deleted once the plan landed (per `superpowers:subagent-driven-development`'s own
+convention); a fresh clone won't have it. The commits and `TRANSCRIPT.md` are the permanent
+record.
