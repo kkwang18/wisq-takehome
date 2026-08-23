@@ -70,7 +70,7 @@ class VectorIndex:
     def search(
         self,
         query: str,
-        k: int = 5,
+        k: int = SEARCH_K,
         doc_type: str | None = None,
         version_year: int | None = None,
     ) -> list[ScoredChunk]:

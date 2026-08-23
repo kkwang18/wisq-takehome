@@ -42,6 +42,13 @@ def test_no_fixed_number_phrasing_is_recognized_as_unknown():
     assert matches("unknown", "There is no fixed number of sick days on file.", grounded=True)
 
 
+def test_no_specific_number_phrasing_is_recognized_as_unknown():
+    # Live edge_cases.py run: "No specific number of weeks/days is on file for maternity
+    # leave in Japan." is a correct, properly-hedged answer, but didn't match any existing
+    # marker — same recurring pattern as "no fixed number" above, different wording.
+    assert matches("unknown", "No specific number of weeks/days is on file for maternity leave in Japan.", grounded=True)
+
+
 def test_compound_list_requires_every_condition():
     assert matches(["12", "unknown"], "12 days, but I don't know the rest", grounded=True)
     assert not matches(["12", "unknown"], "12 days, all figures confirmed", grounded=True)
@@ -97,3 +104,30 @@ def test_numeric_marker_matches_at_string_boundaries():
     # No character at all on one side (start/end of string) must still count as a boundary.
     assert matches("12", "12 days per year.", grounded=True)
     assert matches("12", "The allowance is 12", grounded=True)
+
+
+# A live verify_answer rejection (garbled fallback text) once contained the expected "$50"
+# marker by pure substring accident, so eval.py "passed" a query that was actually ungrounded
+# — see docs/backlog/2026-08-22-verify-answer-prefix-parsing-false-rejection.md. Numeric and
+# hedge markers must require grounded=True: a rejected answer should never satisfy an
+# expectation that implies the system actually confirmed the figure/ambiguity.
+def test_numeric_marker_does_not_match_an_ungrounded_rejection_even_if_the_digits_appear():
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: ...the global $50/month rate winning over the regional "
+        "$30/month rate... SUPPORTED"
+    )
+    assert not matches("$50", rejection_text, grounded=False)
+
+
+def test_hedge_marker_does_not_match_an_ungrounded_rejection():
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: it's ambiguous which country applies here..."
+    )
+    assert not matches("hedge", rejection_text, grounded=False)
+
+
+def test_numeric_and_hedge_markers_still_match_when_grounded():
+    assert matches("$50", "The gym reimbursement is $50 per month.", grounded=True)
+    assert matches("hedge", "Which specific country are you in?", grounded=True)

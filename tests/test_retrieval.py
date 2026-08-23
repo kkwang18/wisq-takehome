@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 from sentence_transformers import SentenceTransformer
 
 from src.models import Chunk, DocMeta
-from src.retrieval import VectorIndex, embed_text
+from src.retrieval import SEARCH_K, VectorIndex, embed_text
 
 GLOBAL_2025 = DocMeta(file="g25.docx", doc_type="global_handbook", jurisdictions=None, version_year=2025, display_name="Global Handbook 2025")
 GLOBAL_2026 = DocMeta(file="g26.docx", doc_type="global_handbook", jurisdictions=None, version_year=2026, display_name="Global Handbook 2026")
@@ -24,6 +26,14 @@ def sample_chunks():
         Chunk(text="Eligible employees in Taiwan are entitled to 12 days of PTO per year.", section_title="PTO", doc=REGIONAL),
         Chunk(text="The standard global gym membership benefit is $50 per month.", section_title="Section 3", doc=GLOBAL_2026),
     ]
+
+
+def test_search_default_k_matches_the_tuned_search_k_constant():
+    # search()'s own default (k=5) had drifted from SEARCH_K (raised to 10 — see
+    # docs/DESIGN.md) — every real call site passes k explicitly so this was never live-wrong,
+    # but a stale default is a footgun for the next caller who omits it.
+    default_k = inspect.signature(VectorIndex.search).parameters["k"].default
+    assert default_k == SEARCH_K
 
 
 def test_embed_text_includes_metadata_header():

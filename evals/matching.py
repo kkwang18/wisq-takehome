@@ -35,6 +35,7 @@ UNKNOWN_MARKERS = [
     "no matching handbook version",
     "no handbook version exists",
     "no fixed number",
+    "no specific number",
 ]
 
 HEDGE_MARKERS = ["ambig", "clarif", "which country", "specific country", "unclear", "depends on"]
@@ -60,5 +61,9 @@ def matches(expected, result_text: str, grounded: bool) -> bool:
     if expected == "unknown":
         return any(marker in lowered for marker in UNKNOWN_MARKERS) or not grounded
     if expected == "hedge":
-        return any(word in lowered for word in HEDGE_MARKERS)
-    return _numeric_boundary_matches(expected, result_text)
+        # Unlike "unknown", a hedge/numeric expectation implies the system actually confirmed
+        # the figure or ambiguity — an ungrounded rejection must never satisfy it just because
+        # the rejection text happens to contain a matching word/digit by accident (a rejected
+        # draft's dumped verifier reasoning can echo almost anything from the source excerpts).
+        return grounded and any(word in lowered for word in HEDGE_MARKERS)
+    return grounded and _numeric_boundary_matches(expected, result_text)
