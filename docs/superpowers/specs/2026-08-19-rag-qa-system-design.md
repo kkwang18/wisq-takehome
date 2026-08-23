@@ -1,7 +1,9 @@
 # RAG Q&A System — Design Spec
 
 Date: 2026-08-19
-Status: Approved for implementation
+Status: **Superseded by `docs/DESIGN.md`.** This is the pre-implementation proposal — kept as
+historical record of what was planned before implementation and the many live fixes since.
+For how the system actually works today, read `docs/DESIGN.md` instead.
 
 ## Problem
 
