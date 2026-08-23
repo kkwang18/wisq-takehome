@@ -1,10 +1,11 @@
 # BACKLOG: `verify_answer` over-rejects correct answers based on absence-inference reasoning
 
-**Status:** Fixed (2026-08-21), together with the sibling precedence ticket, via one shared
-addition to `build_verification_prompt` rather than two separate patches. See "Fix
-implemented" at the bottom for what shipped, the adversarial evidence gathered before landing
-it, and why the retrieval-side update below is a separate, already-addressed contributor to
-one shape of this bug, not the same fix as this ticket's `verify_answer` reasoning fix.
+**Status:** Fixed (2026-08-21), then recurred twice on 2026-08-22 and given a second,
+more precisely root-caused fix the same day (a third credited inference pattern, "closed-list
+exclusion" — see "Second fix implemented" near the bottom). The 2026-08-21 fix addressed
+patterns (a)/(b); the recurrences traced to a third, distinct pattern (c) neither covered. See
+"Fix implemented" below for the original shared addition with the sibling precedence ticket,
+and "Second fix implemented" for what closed the recurrences.
 
 **Discovered:** 2026-08-20, during the initial latency-investigation session (first
 reproduction, "California PTO"), and corroborated again the same day during a
@@ -218,3 +219,72 @@ that would need a much larger live sample than was practical here. Watch for a r
 same way the retrieval-side update below was originally caught: a live report of an
 absence-inference draft (any jurisdiction, any benefit) being wrongly rejected after this fix
 would mean the shared addition needs to be revisited, not that this fix failed outright.
+
+## Recurrence observed (2026-08-22)
+
+A full `python -m evals.edge_cases` run (part of a broader P2/gap-closing session, see
+`docs/TRANSCRIPT.md`) reproduced the exact flagship case from this ticket's own "Concrete
+examples" section — "What is the PTO for a Chinese national who works remotely from
+California?" — rejected again:
+
+> "UNSUPPORTED: The excerpts do not mention California, remote work, or any rule
+> distinguishing work location from nationality for determining APAC handbook applicability.
+> The claim that 'your work location (not your nationality) is what counts' and the scenario
+> of 'working remotely from California' are not supported by any excerpt — this appears to be
+> a fabricated scenario/fact not present in the provided material."
+
+Per this ticket's own note above, this is exactly the kind of recurrence flagged as possible —
+the adversarial battery proved no *over*-generalization, not that the false-positive rate
+dropped to zero, and a single failure in one live run (this was 1 of 36 questions in that
+`edge_cases.py` pass, unrelated to any code touched that session — `src/verification.py`'s
+`build_verification_prompt()` was not modified) is consistent with the "roughly
+1-in-3-to-1-in-2" intermittent rate this ticket already documented pre-fix, not proof the fix
+regressed. Not re-investigated or re-fixed as part of that session (out of scope for what was
+asked); flagged here per this ticket's own instruction rather than left silently unnoticed.
+Whoever revisits this ticket should treat this as one more data point toward measuring the
+real post-fix rate, not as a reason to assume the fix failed.
+
+## Second fix implemented (2026-08-22): the actual root cause of the recurrence
+
+The recurrence above, plus a second live report the same day ("California employee in 2026"
+nondeterministically rejected — the flagship take-home query itself), were root-caused
+properly this time via live instrumentation rather than assumed to be more of the same
+"residual sampling noise." Reproducing the query 8 times with logging on every `search_handbooks`
+call showed the APAC handbook's `SCOPE` excerpt (the one enumerating China/Japan/Taiwan and
+saying "personnel outside these three jurisdictions should refer to the global Acme Employee
+Handbook") was retrieved and cited in all 8 reps — ruling out retrieval variance as the cause.
+
+The actual mechanism was visible directly in the user's own captured rejection text:
+
+> "The only regional handbook provided is the APAC Benefits Handbook covering China, Japan,
+> and Taiwan. The claim that 'there's no regional handbook on file covering California' is
+> not supported by the excerpts..."
+
+The verifier states the fact that proves the claim, then declines to draw the one-step
+conclusion. This is a real, specific gap in `build_verification_prompt`, not irreducible
+noise: patterns (a) and (b) above are anchored to specific wording ("for all other cases...",
+"unless a specific provision states otherwise"), and the `SCOPE` excerpt's actual wording — an
+enumerated closed list plus an explicit "everyone else, refer elsewhere" instruction — doesn't
+pattern-match either trigger phrase, despite being logically at least as strong evidence as
+pattern (b) requires.
+
+Added a third credited pattern, (c) "Closed-list exclusion," with the same boundary-clause
+discipline as (a)/(b) (only applies when the list is explicitly closed/exhaustive with an
+explicit fallback instruction — see `src/verification.py`). Adversarially tested via a scratch
+probe script (not committed) against the real cited excerpts (`SCOPE`, `CONFLICTS AND
+PRECEDENCE`, the global handbook's `4.2 PTO` paragraph): the correct draft went 6/6 `SUPPORTED`
+(previously intermittent — this is the same query that triggered this ticket originally and
+its recurrence above); three adversarial controls at 3 reps each — an inverted-direction draft
+wrongly claiming California *is* covered by the APAC closed list, a fabricated-number draft, and
+an unrelated-fabrication draft — all stayed correctly `UNSUPPORTED`, 9/9, no sign the added
+leniency over-generalized. End-to-end (`main.py --ask`) reconfirmed clean 4/4, and both
+recurrences on this ticket (the "California 2026" report and the "Chinese national remote from
+California" case) were independently reconfirmed clean 3/3 each after the fix. Regression:
+80/80 offline tests pass, `python -m evals.eval` 8/8 live.
+
+**Status: closed with higher confidence than the first fix.** This time the root cause was
+directly evidenced (not inferred from a documented "roughly 1-in-3-to-1-in-2" rate), the fix
+targets the exact wording gap that caused it, and the adversarial sample is comparable to the
+original fix's (9 adversarial reps here vs. 18 across two patterns originally, but concentrated
+on the one pattern actually changed). Standard caveat still applies: a finite live sample
+cannot prove a zero rate, only that this battery found no regression.

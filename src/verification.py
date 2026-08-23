@@ -38,10 +38,21 @@ def build_verification_prompt(draft: str, cited_chunks: list[Chunk]) -> str:
         "rule is the complete and final answer for that case — the absence of a specific "
         "override does not itself need to be separately stated in the excerpts to be a valid "
         "basis for the conclusion.\n"
-        "Both exemptions apply only when the excerpts' own wording makes the case's scope "
-        "unambiguous — if the excerpts leave genuine doubt about which rule actually covers "
-        "the case in the draft (not just the existence of a different rule elsewhere), that "
-        "is a real ambiguity and should still be flagged as UNSUPPORTED.\n\n"
+        "(c) Closed-list exclusion: when an excerpt enumerates a closed, finite list of cases "
+        "it covers (e.g. specific named jurisdictions) and separately instructs anyone or "
+        "anything not on that list to refer elsewhere (e.g. a different handbook), a case "
+        "that is not named in the list is definitively excluded — the excerpt does not need "
+        "to separately name that specific case to establish the exclusion. Being outside an "
+        "explicitly closed list, combined with an explicit 'everyone else, refer to X' "
+        "instruction, is itself the complete and final confirmation of non-coverage, not "
+        "merely an absence of information. Do not flag a draft as UNSUPPORTED for stating "
+        "this exclusion just because the excerpt never mentions the specific case by name.\n"
+        "All three exemptions apply only when the excerpts' own wording makes the case's "
+        "scope unambiguous — if the excerpts leave genuine doubt about which rule actually "
+        "covers the case in the draft (not just the existence of a different rule elsewhere), "
+        "or if it's unclear whether a list is meant to be closed/exhaustive rather than "
+        "illustrative, that is a real ambiguity and should still be flagged as "
+        "UNSUPPORTED.\n\n"
         f"Excerpts:\n{excerpts}\n\nDraft answer:\n{draft}"
     )
 
@@ -53,10 +64,22 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
             grounded=False,
         )
 
+    if not any(c.doc.display_name in draft for c in cited_chunks):
+        return VerifiedAnswer(
+            text="The answer's citation doesn't name any of the retrieved excerpts, so this "
+            "cannot be confirmed as grounded.",
+            grounded=False,
+            rejected_draft=draft,
+        )
+
     prompt = build_verification_prompt(draft, cited_chunks)
     verdict = llm_call(prompt).strip()
 
-    if verdict.startswith("SUPPORTED"):
+    # Case-insensitive: verify_llm_call's enum-constrained tool guarantees exact case today
+    # (see docs/backlog/2026-08-22-verify-answer-prefix-parsing-false-rejection.md), but this
+    # is a general-purpose function any llm_call implementation can drive. "UNSUPPORTED" does
+    # not start with "SUPPORTED" even uppercased (it starts with "UN"), so this stays safe.
+    if verdict.upper().startswith("SUPPORTED"):
         return VerifiedAnswer(text=draft, grounded=True)
 
     fallback = (
