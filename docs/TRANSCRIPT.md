@@ -998,3 +998,530 @@ Executed in that order, TDD throughout, one commit per item:
 Updated `CLAUDE.md` (decisions, gaps, and status sections) and this transcript incrementally
 as each item landed, per the standing instruction to keep documentation current during the
 work rather than batched at the end.
+
+## 22. A live formatting-inconsistency report leads to a plain-prose, compound-question rule
+
+**User** reported that asking the same compound question twice ("Do employees have any sick
+days? What about 401k? What about vision, dental, or medical insurance?") produced visibly
+different formatting across runs — one answer used a bulleted list with bold topic labels
+plus an intro paragraph and a closing paragraph, the other used flowing prose with none of
+that — and asked how to make the system's output more consistent.
+
+Classified as a bounded brainstorming task (an existing flow — `SYSTEM_PROMPT`'s three-part
+final-answer structure in `src/agent.py` — being tightened, not a new subsystem). Root cause,
+confirmed by reading `src/agent.py`: the three-part verdict/reason/citation structure was
+written assuming a single verdict and had no rule at all for a question bundling multiple
+distinct topics, so the model improvised a different shape each time it hit that case.
+Checked `main.py` and confirmed it does a bare `print(result.text)` with no markdown
+renderer, so the bulleted run's `**bold**` labels were rendering as literal asterisks in the
+terminal — a second, independent argument against markdown formatting beyond consistency.
+
+Presented the two live-verified downsides of a bulleted-list fix before the user chose a
+direction: (1) "verdict first" would need to hold independently inside each bullet instead of
+once for the whole message; (2) citation granularity becomes ambiguous (one shared tag can't
+show which bullet it backs); (3) list framing invites the same intro/outro creep already
+visible in the reported bug; (4) "what counts as one bullet" (e.g. is "vision, dental, or
+medical insurance" one topic or three) is itself a new source of run-to-run variance. User
+weighed the scannability benefit of bullets against these, then chose the simpler, fully
+unambiguous option: plain prose only, one shape for every answer regardless of question
+complexity, including hedge/unknown verdicts.
+
+TDD'd: added `test_system_prompt_forbids_structural_formatting_and_normalizes_compound_questions`
+to `tests/test_agent.py` (substring assertions on `SYSTEM_PROMPT`, following the existing
+`test_system_prompt_encodes_grounding_and_precedence_rules` pattern), confirmed it failed red,
+then edited `SYSTEM_PROMPT` to (a) explicitly ban bullets/numbered lists/headers/bold in the
+final-answer instruction, and (b) add a compound-question rule stating the three-part shape
+applies once to the whole message — one verdict sentence naming every topic's outcome
+together, one reason sentence covering all of them, one citation tag that may name more than
+one document/section — with hedge/unknown verdicts following the identical shape. 60/60
+offline tests pass.
+
+Live-verified with the API key passed inline per command (the user's `! export
+ANTHROPIC_API_KEY=...` again didn't reach Claude's separate Bash shell, same environment
+limitation as session 21 — this time recognized immediately from the transcript's own
+history instead of being rediscovered): 3 reps of the exact reported query all came back in
+the identical plain-prose shape, no bullets or markdown in any of them. Re-ran `evals.eval`'s
+8-query regression suite: 7/8 passed; the 1 failure (California PTO, no year given) was a
+`verify_answer` rejection over an unrelated "is 2026 the current version" inference — not
+touched by this change (`SYSTEM_PROMPT`'s version-resolution rule and `verify_answer` itself
+were both left untouched). Confirmed as pre-existing flakiness, not a regression, by
+re-running that specific query 3 more times: all 3 landed on the correct 15-days answer,
+consistent plain-prose shape, no rejection. Updated `CLAUDE.md` (decisions and status
+sections) and this transcript incrementally, per the standing instruction.
+
+## 23. Plain prose still wasn't guaranteed apart — moved formatting into a `submit_answer` tool
+
+**User** reported a follow-up problem with the fix above: running the same compound question
+(and the 8 example queries) still showed the citation sometimes jammed directly onto the
+reason sentence (`"...applies. — (Doc, Section)"`, no line break) and sometimes on its own
+line, and asked to "ensure the format is answer, reason, citation separated apart," with
+test-suite coverage of it, and for the format to "always be consistent."
+
+Read `src/verification.py` and `evals/matching.py` first to confirm neither depended on any
+particular whitespace layout, then proposed the actual fix: a prompt instruction can't
+*guarantee* separation, since free text gives the model no structural boundary between
+"reason" and "citation" — this codebase had already hit exactly this kind of live sampling
+variance once before (the verdict-ordering fix, session history above). The fix instead moves
+formatting out of the model's hands: a new `submit_answer` tool with three separate fields
+(`verdict`, `reason`, `citation`) instead of free chat text, and a pure `format_answer()`
+function in code that deterministically assembles them as three blank-line-separated
+paragraphs. This makes the layout itself testable offline with zero API calls, directly
+answering the "ensure the testsuite covers this" ask.
+
+User asked one clarifying question before approving: does forcing three rigid fields fit
+every answer shape (definitive, hedge, unknown/absence, compound)? Answered by walking
+through each shape against the existing three-part contract (already established, unchanged
+by this fix) and confirming the fields don't add a new constraint — they structurally enforce
+what free text was already supposed to do. One real adjustment made in response: kept
+`verdict`/`reason` as unconstrained free-text strings rather than schema-locking them to one
+sentence, so the separation guarantee doesn't fight a compound question's need for a slightly
+longer field.
+
+TDD'd in `tests/test_agent.py`: new tests for `format_answer()` (blank-line separation, exact
+citation wrapping, whitespace stripping — all pure, no API), a `submit_answer` tool-schema
+test, a `SYSTEM_PROMPT` test asserting it requires the tool instead of plain text, and
+rewrote the scripted-response tests to script a `submit_answer` tool-use response instead of
+a raw text block for the final turn. Implementation: added `SUBMIT_ANSWER_TOOL`, rewrote the
+final-answer section of `SYSTEM_PROMPT` to describe the three fields instead of three prose
+parts, added `format_answer()`, and changed the loop to route `tool_use` blocks by name
+(`submit_answer` → assemble draft and stop; anything else → `search_handbooks` as before) and
+to pass `tool_choice={"type": "any"}` on every call, forcing the model to always call some
+tool rather than ever falling back to unstructured chat text. 64/64 offline tests pass.
+
+Live-verified with the API key passed inline again (same environment limitation as sessions
+21–22): 3 reps of the exact reported compound query all landed in the identical three-
+paragraph shape — verdict, blank line, reason, blank line, citation — every time. Re-ran
+`evals.eval`'s 8-query suite: 8/8. One unrelated oddity surfaced in that run: the Taiwan-gym
+query's `verify_answer` call returned raw text that opened with `"UNSUPPORTED: ..."`, reasoned
+through a self-correction, and ended on `"SUPPORTED"` — since `verify_answer` checks
+`.startswith("SUPPORTED")`, it took the rejection branch despite the verifier's own final
+conclusion being supported, and the eval only "passed" because `"$50"` happened to appear
+inside the long rejection text the matcher scanned. Confirmed as pre-existing, unrelated
+flakiness (not caused by this session's change, since neither `verify_answer.py` nor
+`build_verification_prompt` were touched) via 3 clean reruns of that exact query: all 3
+landed correctly `SUPPORTED`, cleanly formatted, no recurrence. Flagged to the user as a
+candidate follow-up rather than fixed here, since it was outside what was asked this session.
+Updated `CLAUDE.md` (architecture, decisions, open questions, and status sections) and this
+transcript incrementally, per the standing instruction.
+
+## 24. A backlog ticket written for review, then implemented per the user's re-scoping
+
+**User** asked to look at the flagged `verify_answer` prefix-parsing oddity, but wanted a
+ticket written up for review first — before any implementation. Wrote
+`docs/backlog/2026-08-22-verify-answer-prefix-parsing-false-rejection.md` following the two
+existing `verify_answer` tickets' established structure (summary, concrete example, root
+cause, suggested fix, test plan, files involved), including the exact captured verifier
+response as the concrete example, a hypothesis connecting it to the two related (closed)
+tickets' shared prompt addition possibly increasing verifier verbosity on borderline cases,
+and a primary suggested fix (mirror the `submit_answer` pattern: enum-constrained tool field
+instead of free-text prefix parsing) plus a cheaper, not-recommended alternative (more robust
+text parsing).
+
+**User** made three scoping calls on the draft before implementation: (1) skip the
+occurrence-rate stress test in the test plan — the fix is worth shipping regardless of the
+pre-fix rate, and live API spend to measure it isn't justified; (2) don't leave the
+"connection to the recent precedence fix" as an open, still-unconfirmed thread — since the
+chosen fix makes verifier verbosity structurally irrelevant to correctness, state that
+explicitly as the resolution once the fix lands, independent of whether the earlier fix
+actually caused more out-loud reasoning; (3) note that `evals.eval` passing the triggering
+query anyway is a second, independent instance of the substring-matching blind spot already
+documented for `evals/matching.py`'s numeric markers — different code path (the eval matcher
+never consults `grounded`), same root-cause class (checking a substring's presence instead of
+confirming it means what the check assumes) — worth cross-referencing, not fixing here. Edited
+the ticket to reflect all three before starting implementation.
+
+Implemented the primary suggested fix via TDD. Read `tests/test_verification.py` first and
+confirmed `verify_answer.py` itself didn't need to change — the fix belongs entirely at the
+call site, since `verify_answer`'s contract (trust a string starting with "SUPPORTED"/
+"UNSUPPORTED") is fine; what needed fixing was *guaranteeing* the caller hands it exactly
+that, instead of parsing whatever prose the verifier happened to write. Extracted the
+previously-inline, untestable `llm_call` closure in `answer_question` into a standalone
+`verify_llm_call(client, prompt)`, added `VERIFY_TOOL` (`report_verification`, `verdict`
+constrained to `enum: ["SUPPORTED", "UNSUPPORTED"]`, separate `reason` field), and forced
+`tool_choice={"type": "tool", "name": "report_verification"}` so no free-text fallback is
+possible. Wrote the regression test directly encoding the reported bug's shape first
+(`test_verify_llm_call_ignores_reasoning_verbosity_in_verdict_classification` — a long,
+self-correcting-looking `reason` paired with `verdict: "SUPPORTED"`, asserting the output is
+exactly `"SUPPORTED"`), confirmed it red (import error, then assertion failure against the
+old closure), then implemented. Also added a tool-schema test, both classification-branch
+tests, a forced-`tool_choice` test, and updated the existing scripted-response test to script
+a `report_verification` tool call instead of a raw `"SUPPORTED"` text block. 69/69 offline
+tests pass.
+
+Live-verified with the API key passed inline again: 5 reps of the exact reported query
+(Taiwan gym benefits) all came back cleanly formatted and correctly `grounded=True`, no
+misclassification in any of them — a larger sample than the 3-rep spot-checks used earlier in
+this session, since this was the specific mechanism being fixed. Re-ran `evals.eval`'s 8-query
+suite: 8/8, including the previously-accidental Taiwan-gym pass now genuinely correct rather
+than a substring coincidence. Updated the ticket's status to Fixed with a "Fix implemented"
+section (mirroring the two related tickets' pattern), including the explicit resolution of
+the "connection to the recent precedence fix" thread per the user's instruction 2 above.
+Updated `CLAUDE.md` (architecture, decisions, open questions — replacing the now-fixed bullet
+with the newly cross-referenced `evals/matching.py` gap, and status) and this transcript
+incrementally, per the standing instruction.
+
+## 25. `docs/DESIGN.md` written — an as-built architecture doc for engineers picking up this repo
+
+**User** asked for a design doc covering the system's core components, tradeoffs, why each
+decision was made, and what would need to improve to make this a larger-scale system —
+followed shortly by a mid-turn clarification that the doc needed to be written so other
+engineers could understand the tech specs and begin work in this repo, not just as a
+retrospective summary.
+
+Re-read the actual source files (`chunking.py`, `retrieval.py`, `docx_reader.py`, `models.py`,
+`documents.yaml`, `ingest.py`) rather than writing purely from `CLAUDE.md`'s decision log, to
+ground every claim in current code with real line numbers rather than paraphrased memory of
+past sessions. Loaded the `artifact-design` skill before writing, per its own hard
+requirement, and confirmed Markdown was the right call under that skill's own guidance
+("fits only when... the content is bound for a Markdown-native destination") — this document
+is meant to live in the repo and be read by engineers there, not primarily as a standalone
+web page.
+
+Wrote `docs/DESIGN.md`: a repo map table, a step-by-step "life of a query" trace through every
+file for `main.py --ask "..."` (the fastest orientation path for someone new), two mermaid
+architecture diagrams (ingest pipeline, query pipeline), six core components each with what it
+does, real file/line references, and — the actual "tradeoffs" ask — the rejected alternatives
+and live evidence that ruled them out (raw XML vs. `python-docx`, paragraph vs. sentence
+chunking, contextual embeddings, `numpy` vs. the prototyped-and-rejected vector DB, the
+tool-schema pattern used twice to fix free-text formatting bugs), a "design principles that
+cut across components" section naming the throughlines worth carrying into new work, "known
+limitations" grouped by risk type rather than discovery date, and a 7-item "path to scale"
+roadmap ranked by what would actually break first at real traffic (observability first, since
+none exists; eval-harness rigor next; then the two already-designed-and-deferred backlog
+tickets correctly ranked by their real trigger condition — corpus growth, not calendar time —
+rather than backlog age).
+
+Updated `README.md`'s pointer to make `docs/DESIGN.md` the primary design reference over the
+original pre-implementation spec (kept, relabeled as historical context). Published as an
+artifact for easy reading/sharing (favicon 🧭), redeployable to the same URL on future edits.
+
+## 26. `CLAUDE.md` compressed to session-continuity only; `HISTORY.md` rebuilt as a navigable index
+
+**User** asked to compress `CLAUDE.md` down to only what's needed to maintain continuity
+across different Claude sessions — now that `docs/DESIGN.md` owns architecture/tradeoffs —
+and to fold `HISTORY.md` into a more navigable version of `TRANSCRIPT.md`, explicitly leaving
+`TRANSCRIPT.md` and `DESIGN.md` untouched.
+
+Rewrote `CLAUDE.md` (486 → 94 lines) around what a fresh session actually needs to avoid
+repeating a settled mistake or re-deriving a settled decision, not a human-facing project
+overview: a one-paragraph orientation with pointers to `DESIGN.md`/`TRANSCRIPT.md`/
+`HISTORY.md`/`backlog/`; the six domain rules as an explicit correctness contract (local wins
+only for PTO, more-generous-wins otherwise, latest-version-when-unstated, unknown-not-a-guess,
+hedge-not-a-coinflip, no-hallucination-ever); operating rules (TDD + live-verification
+discipline, the tool-schema-over-prompt-hope principle now proven twice, an explicit "don't
+propose a vector DB or LLM chunking without reading `docs/backlog/` first" directive to head
+off re-litigating an already-prototyped-and-deferred decision); known gotchas that would
+actually bite a fresh session (the `temperature` 400 error, the thinking/`max_tokens`
+interaction, the `evals` import-path requirement, the `!`-export-doesn't-reach-Bash-tool
+environment quirk, the `version_year=None` sentinel semantics, the `split_sentences_in_sections`
+typo validation); and a condensed current-status paragraph that honestly flags
+`edge_cases.py`'s 34/36 number as stale (predates a fix that likely resolves both failures,
+not rerun since).
+
+Rebuilt `HISTORY.md` (502 → 171 lines) as a genuine index rather than a second, slightly
+shorter narrative: 7 thematic groups (not strictly chronological — grouped by what the work
+was actually about) covering all 24 `TRANSCRIPT.md` sections, each entry a one-to-three-
+sentence hook plus a `§N` pointer. Chose plain-text `§N` references over generated anchor
+links — this codebase already cites `TRANSCRIPT.md` sections this way elsewhere, and hand-
+computing GitHub's heading-slug algorithm correctly for headers containing em dashes and
+punctuation (several `TRANSCRIPT.md` headers do) is fragile enough to not be worth the risk
+of a silently broken link. Updated `README.md`'s pointer line so it frames `HISTORY.md`
+correctly as the index, not a parallel narrative.
+
+No code changed this session — documentation-only, verified by inspection (structure,
+cross-references, accurate line/section mapping) rather than a test run, since there was
+nothing to test.
+
+## 27. Closing five flagged gaps: two fixes, two confirmations, and one new finding
+
+**User** asked to close out five items in one batch: confirm/fix the `evals/matching.py`
+`grounded`-flag gap; fix the Asia-gym hedge that undercuts itself by revealing both branches'
+figures; a systematic corpus grep for scope/exception language to rule out a second latent
+`SCOPE`-shaped chunking bug; live stress tests of precedence logic beyond two-rule conflicts
+(three overlapping rules; a benefit type the global handbook doesn't mention at all); and a
+batched P2 sweep (verdict case-sensitivity defensive check, `VectorIndex.search()`'s stale
+`k=5` default, a deterministic citation-name cross-check). Mid-turn, the user separately
+flagged that `TRANSCRIPT.md` had gone two full sessions (the `DESIGN.md` write-up and the
+`CLAUDE.md`/`HISTORY.md` compression) without an entry — closed as §25/§26 above before
+continuing this batch, so there's no gap in the record.
+
+Worked the corpus-grounded items first. Pulled the real 73-chunk corpus directly
+(`index/chunks.jsonl`) and grepped every chunk for `specifically|except|for all other|
+unless|supersede[sd]?|does not apply|other than|excluding|only applies|refer to|nothing in
+this`. Found five distinct clauses with dilution-risk shape beyond the already-fixed `SCOPE`
+case (two merged into the global handbook's `SECTION 1` welcome paragraph, one merged into
+`SECTION 8`'s local-law carve-out, two already-well-tested APAC `CONFLICTS AND PRECEDENCE`
+clauses) and live-tested retrieval rank for each with realistic queries via the real
+`VectorIndex`: all ranked top-3 of 25 candidates, comfortably inside `SEARCH_K=10` — no second
+latent bug. Then stress-tested precedence beyond two-rule conflicts, live: a genuine 3-layer
+chain (Taiwan 2025 PTO — regional override, then a statutory-minimum caveat, then a correct
+refusal to guess Taiwan's actual statutory figure since it's not in the corpus) held correctly
+across 3 reps, as did a benefit type absent from every document (stock options/equity
+compensation) across 3 reps.
+
+TDD'd the eval-matcher fix: `evals/matching.py`'s numeric and hedge markers now require
+`grounded=True`, so a rejected/ungrounded answer can never "pass" just because the expected
+marker happens to appear inside the dumped rejection text by coincidence (the exact mechanism
+that let a real `verify_answer` bug go unnoticed in the previous session). TDD'd the P2 sweep
+together, since all three touch `verify_answer`/`VectorIndex`: `verify_answer`'s verdict check
+is now case-insensitive (`.upper().startswith(...)`, defensive — `VERIFY_TOOL`'s enum already
+guarantees exact case for the tool-based path, but `verify_answer()` is general-purpose);
+`VectorIndex.search()`'s default `k` now matches `SEARCH_K` instead of a stale `5`; and a new
+deterministic pre-check hard-fails `grounded=False` if a draft's citation names none of the
+actually-retrieved documents by `display_name` — same "fail closed without a model call"
+posture as the existing empty-`cited_chunks` check. Required rewriting `tests/test_verification.py`'s
+fixtures to use realistic `format_answer()`-shaped drafts (with real citations) instead of bare
+sentences, since the new citation check would otherwise short-circuit tests whose actual
+purpose was exercising a different code path. 79/79 offline tests pass after this stretch.
+
+The Asia-gym hedge fix needed two live-tested rounds, the same shape as this project's
+verdict-ordering fix from an earlier session. Round 1 (an explicit WRONG/RIGHT example: don't
+reveal what the answer would be under each branch, even if both branches converge) closed most
+of it, but 1 of 4 reps still leaked "covered APAC employees would actually get the global
+$50/month rate... if you're elsewhere, only the global $50/month rate applies" — almost
+verbatim the WRONG example, just phrased as two separate conclusions instead of one combined
+"either way" statement. Round 2 added a second, narrower closure: naming each candidate
+policy's own number as "just supporting detail" for the rule is exactly as disqualifying as
+naming the converged answer. Retested with 6 reps: 4 clean, but 2 hit a *different*,
+newly-surfaced issue — `verify_answer` incorrectly rejecting a correct draft, reasoning that
+the APAC gym rate might deserve PTO-style regional precedence (it explicitly doesn't; the same
+excerpt routes "all other benefits" to the global rule). Confirmed via `eval.py`'s own
+Asia-gym rep (clean) that this wasn't a regression from the hedge-wording change itself.
+
+Wrote up the new finding as `docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md`,
+following the established ticket format: root cause hypothesis (the verifier may be
+over-generalizing the "specific carve-out" pattern from the two already-closed sibling tickets
+to a benefit the same excerpt explicitly *doesn't* carve out), both captured rejection texts
+verbatim, and a suggested fix mirroring the sibling tickets' boundary-clause approach — not
+implemented, since it needs the same adversarial-testing rigor those tickets required before
+shipping, which this session didn't have budget to also do.
+
+Ran the full `evals.edge_cases` 36-case suite live to refresh a number `CLAUDE.md` had already
+flagged as stale, and to check the P2/citation-check changes across more query variety than
+the 8-query suite covers: 32/36. Diagnosed all 4 failures individually rather than reporting a
+raw count — none were regressions from this session's changes:
+
+1. **"Republic of China" PTO** — the model correctly hedged instead of resolving to Taiwan,
+   because the corpus only ever writes "People's Republic of China" (mainland China, a
+   different country) verbatim — resolving "Republic of China" would require outside
+   geopolitical knowledge the entity-hallucination fix from an earlier session explicitly
+   forbids. The edge case's own expectation is stale, not the system. Left a code comment on
+   the case in `evals/edge_cases.py` explaining this, rather than "fixing" it by loosening the
+   anti-hallucination guardrail.
+2. **"Chinese national remote from California"** — an exact recurrence of the
+   absence-inference ticket's own flagship reproduction, closed in an earlier session. Logged
+   as a "Recurrence observed" addendum on that ticket per its own explicit instruction to
+   watch for exactly this, not re-investigated (the ticket's adversarial battery already
+   proved no over-generalization; a single recurrence is consistent with the intermittent
+   rate it already documented, not proof of regression).
+3. **Maternity leave "unknown"** — a correct answer ("No specific number of weeks/days is on
+   file...") that didn't match any existing marker. Pure eval-matcher gap, fixed with a new
+   `"no specific number"` marker and a TDD regression test.
+4. **China conference budget** — the *draft* (not the verifier) mischaracterized gym as a
+   PTO-style carve-out, and `verify_answer` correctly caught its own mistake. Added as
+   corroborating evidence to the new carve-out ticket: the gym-precedence confusion shows up
+   on both the draft-generation and verification sides of the loop, not just verification.
+
+Final state: 79/79 offline, `eval.py` 8/8 live, `edge_cases.py` 32/36 with every failure
+diagnosed and either fixed, logged against an existing ticket, or documented as a stale test
+expectation. Updated `CLAUDE.md` (current status, backlog list) and `docs/DESIGN.md`
+(components, known limitations, path-to-scale item 2) to match, and this transcript
+incrementally as each item landed.
+
+## 28. A live nondeterminism report, root-caused precisely instead of re-patched again
+
+**User** reported the same query, run twice, giving two different answers — a correct draft
+one time, a `verify_answer` rejection the other — for `"What is the PTO allowance for a
+California employee in 2026?"`, one of the take-home's own 8 example queries. Framed it as a
+recurring issue ("this seems to be a reoccurring issue in our system... How can we make it
+more rigorous") and asked for a fix, not just a rerun.
+
+Invoked `superpowers:brainstorming` explicitly for this. First proposal (a retry: if
+`verify_answer`'s first call says `UNSUPPORTED`, try once more before falling back) was a
+mitigation, not a diagnosis — presented with its real tradeoff named (retrying also gives a
+genuinely wrong draft a second chance to slip through). **User pushed back directly**: "this
+still leaves the possibility of returning an incorrect answer and adding additional call
+overhead... probe this system carefully." Correct call — proceeded to actually investigate
+before proposing again.
+
+Wrote a scratch instrumentation probe (not committed) that monkeypatches `VectorIndex.search`
+to log every query and every chunk cited, then ran the reported query 8 times live. All 8 came
+back clean, and — the key finding — the APAC handbook's `SCOPE` excerpt (the one naming
+China/Japan/Taiwan and saying "personnel outside these three jurisdictions should refer to the
+global Acme Employee Handbook") was retrieved and cited in every single rep. This ruled out
+retrieval variance as the cause before proposing anything. The actual mechanism was then
+visible directly in the user's own originally-pasted rejection text: the verifier stated *the
+fact that proves the claim* ("the only regional handbook provided is the APAC Benefits
+Handbook covering China, Japan, and Taiwan") and then declined to draw the one-step conclusion
+that California isn't covered — a specific, diagnosable gap, not generic sampling noise.
+Root cause: `build_verification_prompt`'s two existing credited patterns are anchored to
+specific wording ("for all other cases...", "unless a specific provision states otherwise"),
+and the `SCOPE` excerpt's actual wording (an enumerated closed list + an explicit "everyone
+else, refer elsewhere" instruction) doesn't pattern-match either trigger phrase, despite being
+at least as strong evidence as pattern (b) requires.
+
+Revised recommendation to a precise prompt fix — a third credited pattern, "closed-list
+exclusion" — presented with the same tightened-boundary-clause and adversarial-testing
+discipline as the two prior verify_answer fixes, and explicitly ranked ahead of the earlier
+retry idea (held in reserve only if adversarial testing still showed residual failures).
+
+**User** then invoked `superpowers:subagent-driven-development` directly. Flagged the mismatch
+rather than force-fitting it: that skill needs a written implementation plan and independent
+tasks to dispatch across subagents; this was one cohesive, sequential fix with no plan file,
+matching the brainstorming skill's own "bounded" path ("implement via the normal development
+workflow — no plan document") instead. Asked which the user wanted via `AskUserQuestion`;
+answered "approve and implement directly."
+
+Implemented via TDD: a new test asserting the prompt credits `"closed"`/`"enumerat"`ed-list
+language plus a `"refer"` instruction, confirmed red, then added pattern (c) to
+`build_verification_prompt` with the same boundary-clause discipline as (a)/(b) ("only applies
+when... it's unclear whether a list is meant to be closed/exhaustive rather than illustrative,
+that is a real ambiguity and should still be flagged as UNSUPPORTED"). 80/80 offline tests
+pass. Adversarially tested via a second scratch probe (not committed) using the real cited
+excerpts (`SCOPE`, `CONFLICTS AND PRECEDENCE`, the global handbook's `4.2 PTO` paragraph): the
+correct draft went 6/6 `SUPPORTED` (previously intermittent, and this is the exact query that
+started the report); three adversarial controls at 3 reps each (an inverted-direction draft
+wrongly claiming California *is* covered by the closed list, a fabricated-number draft, an
+unrelated-fabrication draft) all stayed correctly `UNSUPPORTED`, 9/9. End-to-end `main.py --ask`
+reconfirmed clean 4/4, `evals.eval` 8/8 live, and — checked specifically since it's the same
+underlying inference — the other open recurrence on this ticket ("Chinese national remote from
+California," found during the prior session's `edge_cases.py` run) reconfirmed clean 3/3 too.
+Updated `docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md` with a
+"Second fix implemented" section, `CLAUDE.md`, and `docs/DESIGN.md`'s verification component
+section to describe all three credited patterns together.
+
+## 29. Final readability/cleanliness pass and wrap-up
+
+**User** asked for a five-item final pass: code readability (naming, dead code, comments),
+confirmed-accurate open/closed references across `CLAUDE.md`/`DESIGN.md`, a final offline +
+live confirmation run, doc-set internal consistency (old spec marked superseded, `HISTORY.md`
+still a short index, `CLAUDE.md`'s status current), and a README pass for cold-repo
+readability.
+
+**Readability.** Re-read every `src/`, `evals/`, and top-level `.py` file fresh. Grepped for
+TODO/FIXME/XXX markers, commented-out code (regex over lines starting `#` followed by
+code-like tokens), and unused imports (AST-based, across `src/`, `evals/`, `tests/`, and the
+two entry points) — all clean; the codebase's established discipline (no dead code, only
+"why" comments) held up under a systematic check, not just a read-through. One real, small
+finding: `_format_excerpts()` in `src/agent.py` had no type hint, and `ScoredChunk` (its
+actual parameter type) wasn't even imported — inconsistent with the rest of the file's full
+typing. Fixed.
+
+**Stale references.** Cross-checked all 7 backlog tickets' own `Status:` lines against every
+"open"/"fixed"/"closed" claim in `CLAUDE.md` and `DESIGN.md` — all accurate, no drift either
+direction. Found a different, real staleness class instead: `DESIGN.md` still described
+`CLAUDE.md` as "the complete decision log... in full detail" in three places (the repo map
+table, "Known limitations," "Design principles," and "Where to find more") — true when
+`DESIGN.md` was originally written, false since the `CLAUDE.md` compression two sessions ago
+moved that role to `TRANSCRIPT.md`/`HISTORY.md`. Fixed all four. Also found every
+`src/agent.py` and `src/verification.py` line-number citation in `DESIGN.md` had drifted
+(both files grew across the last two sessions' fixes — `answer_question` moved 204→214,
+`format_answer` 173→183, `verify_answer` 49→60, `SEARCH_TOOL` 93→103, `SUBMIT_ANSWER_TOOL`
+117→127, `VERIFY_TOOL` 144→154, `verify_llm_call` 180→190); `retrieval.py`/`models.py`/
+`chunking.py` references were untouched files and still correct. Verified every citation
+programmatically (read each cited line, print what's actually there) after fixing, not just
+by eye.
+
+**Doc-set consistency.** Added an explicit "Superseded by `docs/DESIGN.md`" status line
+inside `docs/superpowers/specs/2026-08-19-rag-qa-system-design.md` itself (previously the
+supersession was only stated from `README.md`/`DESIGN.md`'s side — someone opening the old
+spec directly wouldn't have known). Confirmed `HISTORY.md` is still a genuine short index
+(220 lines, 28/28 `TRANSCRIPT.md` sections covered by one-to-three-sentence hooks, not
+regressed into a second narrative) via a direct `§N` cross-reference count. Rewrote
+`CLAUDE.md`'s "Current status" paragraph, which had grown into a mini-narrative across two
+sessions' incremental edits (violating the file's own stated "session-continuity only, not a
+decision log" purpose) — trimmed to facts + pointers, and fixed a subtler staleness: the
+paragraph reported `edge_cases.py`'s pre-fix 32/36 without being explicit that the fix landed
+minutes earlier resolves one of those four failures, which could read as a live discrepancy
+rather than a dated snapshot. Now states the number is pre-fix and points to the ticket rather
+than implying present-tense accuracy it can't back up without an actual rerun.
+
+**Final confirmation.** 80/80 offline tests pass; `evals.eval` 8/8 live (both re-run after
+all doc/code edits landed, not before); a plain-import smoke check confirmed the
+`ScoredChunk` import change didn't break anything.
+
+**README pass.** Walked it as a cold reader against the literal dependency graph, not just
+prose flow, and found the existing section order implied a stricter chain than actually
+exists: `pytest` and both `evals/` scripts each call `ingest.build_index()` directly and
+build their own in-memory index every run (confirmed by reading `tests/test_retrieval_recall.py`'s
+imports) — none of them need `python ingest.py` to have been run first, only `main.py` does.
+Also confirmed the three source `.docx` files are checked into git under `Take Home Test/`
+(not gitignored, no separate download step needed) and that `ANTHROPIC_API_KEY` is required
+only from "Ask questions" onward — `pytest` needs neither the built index nor a key. Rewrote
+the README to state these dependencies explicitly rather than relying on section order to
+imply them, and added a one-line Python-version note (3.9, the actual venv version, given a
+backlog ticket already documents 3.9 as a real constraint for future vector-DB options).
+
+## 30. `edge_cases.py` rerun, a genuine ticket recurrence spotted, then systematic-debugging on it
+
+**User** asked to run `evals.edge_cases` and show the output. 31/36 this time. Diagnosed each
+of the 5 failures individually rather than reporting the raw count: 1 already-known stale test
+expectation, 1 verdict that omitted the actual PTO figure (a new formatting-instruction miss),
+1 new phrasing variant of the already-known matcher-gameability gap ("no specific fixed
+number," dodging both existing markers), and — the significant one — 1 rejection whose
+reasoning was a clean match for the already-*closed* precedence-false-rejection ticket's
+pattern (PTO's specific carve-out treated as an unresolved conflict with the general rule),
+plus 1 more matching the still-open carve-out-overgeneralization ticket. Presented all 5 with
+this categorization rather than just the pass count.
+
+**User** asked for the exact question and full API response for the significant one (China PTO
+2025). Gave the complete, unedited text — no summarizing ellipses.
+
+**User** then asked directly: "so the issue we are seeing is still related to the verifier
+bug?" Answering precisely required correcting something from the prior message: China-PTO-2025
+wasn't the *carve-out-overgeneralization* ticket (which I'd called "still open" moments
+earlier) — it matched the *precedence-false-rejection* ticket instead, a different, already-
+*closed* ticket. Laid out all four `verify_answer` tickets in a table with what each is
+actually about, and the resulting picture: three of four now show live failures (only the
+prefix-parsing ticket's *structural* fix — an enum-constrained tool call — has zero
+recurrences), while every ticket whose fix was a free-text prompt instruction has recurred at
+least once. Named the pattern this reveals explicitly: the "guarantee structurally, don't hope
+via prompt" principle isn't just a nice idea, it's the only one of these fixes holding cleanly
+so far.
+
+**User** then invoked `superpowers:systematic-debugging` directly on the carve-out-
+overgeneralization ticket, with explicit constraints: don't fix until root cause is confirmed
+via live instrumentation reproducing the two originally-captured rejections, and explicitly
+resolve the ambiguity the ticket's own "Related tickets" section had flagged — is this a
+genuinely new failure mode, or an over-broad application of pattern (a)'s existing boundary?
+
+Phase 1 investigation, two methodologies:
+1. Isolated `verify_answer()` probes against the real cited excerpts (`SCOPE`,
+   `CONFLICTS AND PRECEDENCE` ×2, `REGIONAL BENEFITS` ×2, global `SECTION 3`/`SECTION 8`),
+   comparing the current prompt (patterns a/b/c intact) against a surgically-stripped version
+   with the entire credited-patterns block removed — 8 reps each, against two different
+   reconstructed drafts (the first attempt used too simple a draft; the second more faithfully
+   matched the original rejections' description of explicit $50-vs-$30 comparison language
+   within a hedge). **32/32 SUPPORTED — zero reproduction either way**, meaning pattern (a)'s
+   mere textual presence, holding draft and excerpts fixed, doesn't reliably trigger it alone.
+2. Full end-to-end `answer_question()` reproduction with live search-call instrumentation, 12
+   fresh reps of the real query. **10/12 SUPPORTED, 2 rejected** — but neither rejection
+   matched the ticket's original shape. One was a genuine citation-year attribution slip
+   (draft cited "2026, Section 8"; the actually-cited chunk was 2025's, textually identical
+   content) — the verifier catching a real error, arguably correct behavior. The other was a
+   **correct** rejection of a **genuinely wrong** draft that itself mischaracterized the APAC
+   gym rate as taking precedence — a second live recurrence of the draft-generation-side
+   confusion already logged in the ticket's "Corroborating evidence" section, not the
+   verifier-side bug the ticket is actually about.
+
+Resolved the ambiguity precisely: re-reading the two *original* captured rejections against
+this new evidence confirmed they genuinely are over-broad pattern-(a) application — both
+explicitly self-describe the analogical leap in their own reasoning text ("PTO is called out
+with an explicit local-precedence carve-out, suggesting other regional benefits... are
+similarly specific regional entitlements"). But 44 live reps across both methodologies could
+not re-trigger that exact mechanism fresh — meaning root cause is understood with high
+confidence *analytically*, without a reliable live trigger in hand to adversarially test a
+candidate fix's before/after impact against, the same rigor this project's other `verify_answer`
+fixes were held to before shipping. Reported this nuanced state honestly rather than either
+declaring a clean reproduction that didn't happen or proceeding to a fix without one, and asked
+how to proceed.
+
+**User decision:** hold off entirely — no `build_verification_prompt` or other `verify_answer`
+code change for this ticket, severity and false-rejection framing unchanged from the original
+triage, document the findings. Updated the ticket with a full "Root cause investigation"
+section (analytical confirmation, both reproduction attempts' results, the two new findings,
+and the explicit hold decision), appended the second draft-side-confusion recurrence to
+"Corroborating evidence," updated "Suggested fix"/"Test plan" to reflect what's now known
+without re-writing them as if the fix had shipped, and updated `CLAUDE.md`/`DESIGN.md`'s
+one-line and "Known limitations" mentions (both previously said "not yet root-caused," now
+stale given the analytical confirmation).
