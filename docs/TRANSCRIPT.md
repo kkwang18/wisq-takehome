@@ -1739,3 +1739,79 @@ the worktree), then cleaned up: worktree removed, feature branch deleted, SDD wo
 removed (git history is the permanent record now). Final offline count: 81 → 111 across this
 whole arc. Two new backlog tickets and one carve-out-ticket update are the durable trace of
 what was deliberately deferred, not silently dropped.
+
+## 38. `VerifiedAnswer.rejected_draft` removed — confirmed dead first, not assumed
+
+**User** pointed at the exact `docs/DESIGN.md` "Known limitations" bullet flagging
+`rejected_draft` as write-only dead weight and asked to delete it if a repo-wide scan confirmed
+no usage. Grepped the whole repo for the field name before touching anything: four hits, all in
+`tests/test_verification.py` asserting the field's value — zero production callers. Removed the
+field from `VerifiedAnswer` and its two write sites in `src/verification.py`, removed the four
+now-dead test assertions (kept every surrounding test intact), and fixed the three docs that
+had described it as a real, load-bearing capability: `DESIGN.md`'s "Life of a query" step 7 (no
+longer claims a draft is preserved anywhere) and its "Known limitations" bullet (deleted, since
+the limitation it described no longer exists), and the named-entity-hallucination backlog
+ticket's "Suggested follow-up" section (updated to say the field existed for exactly that
+purpose but was removed as confirmed dead code, past tense). Left the already-completed
+eval-matcher-redesign plan/spec files untouched — they're point-in-time execution records of
+already-shipped work, same as this project has always treated superseded specs. 111/111 tests
+still green (net effect: fewer assertions, same test count, since no whole test function was
+deleted). Committed directly to `main` — user-directed cleanup, no brainstorming/plan overhead
+for a bounded, explicitly-scoped deletion.
+
+## 39. `DESIGN.md` restructured around 7 core questions; real, measured SLOs replace the doc's implicit "trust me"
+
+**User** judged `DESIGN.md` too detailed and gave seven organizing questions (what the system
+does, invariants, architecture, why the major decisions were made, known failure modes, what
+happens at scale, how correctness is known) plus explicit follow-up asks: a "System Goals &
+Invariants" section with seven named invariants stated verbatim, a "Non-goals" section stated
+verbatim, replacing "never fabricate" with an accurate defense-in-depth framing (the user
+supplied the exact replacement wording), and a quantitative SLO section — explicitly "don't
+invent them, get real numbers from the system we have built."
+
+Checked all seven proposed invariants against the actual code before writing any of them down,
+rather than transcribing the list verbatim. Six held. The seventh —
+"Reproducibility: the index records the document and embedding versions used to construct it"
+— did not: `VectorIndex.save()` (`src/retrieval.py`) persists chunk text/metadata and raw
+embedding vectors, but never the embedding model name or a document/corpus version stamp.
+Flagged this explicitly rather than writing a false invariant into a document whose whole
+purpose is "how do we know it's correct." **User decision:** ignore that invariant for now, no
+code changes for this exercise — it was dropped from the section entirely, not documented as
+an aspirational gap either.
+
+Rewrote the whole document around the seven questions as top-level sections, trimming
+discovery-narrative language throughout the "Why the major decisions were made" section (the
+old "Core components" Choice/Why/Tradeoff writeups) — dropped phrases like "confirmed via a
+10-query adversarial battery," "this needed two rounds of live strengthening," "regressed an
+already-passing test" wherever the underlying decision/tradeoff could stand on its own, since
+that evidence trail already lives in `docs/TRANSCRIPT.md` and duplicating it was exactly what
+made the doc feel too detailed. "Life of a query" was left untouched (per the standing
+instruction from earlier in this document's history to keep it byte-identical). Added the
+Goals & Invariants and Non-goals sections verbatim to the user's wording. 480→335 lines net,
+despite adding two new sections and a new SLO table.
+
+For the SLO table, actually ran the system rather than estimating. Wrote a throwaway
+instrumented script (not committed — scratchpad only) that ran all 46 live take-home + edge-
+case queries once, timing each and recording `matches()`/`grounded` outcomes: 41/46 (89%)
+correct final answer, latency p50 6.5s / p90 8.5s / p95 9.0s / max 16.0s, and — since this
+project's own standing rule is "single live runs have been misleading before" — a false-
+rejection number needed more than the single accidental rejection that first run happened to
+catch, so ran 3 additional live reps of just the 8 canonical take-home queries specifically to
+get a defensible sample (N=32 total): 3/32 (9%) false-rejection rate, and notably all three
+rejections landed on gym-benefit precedence questions — a fresh, real confirmation of the
+already-open, already-documented carve-out-overgeneralization ticket, not a new problem. Pulled
+retrieval-correctness (11/11, 100%) from the existing offline retrieval-recall test suite
+rather than re-measuring it live, since it's already a real, deterministic, currently-green
+number. Reported the LLM/API transport failure rate honestly as "0 observed, sample too small
+to call a rate" rather than inventing a number neither measured nor claimed as a target.
+
+Published the restructured doc as an artifact (same URL, redeployed). **User** then made two
+rounds of manual edits directly to `DESIGN.md` on disk between republish requests (once
+forgetting to save, caught on the next request) — including merging the separate "What does
+the system do?" section into the top intro paragraph, which orphaned a Contents entry pointing
+at the now-gone heading. Flagged the dead anchor explicitly rather than silently fixing someone
+else's edit; user confirmed removal on the next turn. Separately asked whether margins/font
+size could be adjusted for readability — explained that Markdown-published artifacts render
+through a fixed host template with no CSS hook from the file's content, offered an HTML-artifact
+conversion as the real fix, and the user declined, choosing to keep the simpler Markdown
+publish-and-edit-directly workflow over styling control.

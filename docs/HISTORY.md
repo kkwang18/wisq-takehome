@@ -302,6 +302,25 @@ take-home's 8 example queries correctly — including two with no clean numeric 
   redesigning mid-branch. Merged locally onto `main` after a second full test confirmation;
   offline count went from 81 to 111 across the whole arc.
 
+## 15. Dead-code removal and a real-numbers DESIGN.md rewrite (§38–39)
+
+- **§38 — `VerifiedAnswer.rejected_draft` removed, confirmed dead first.** A repo-wide grep
+  before touching anything found zero production callers, only test assertions. Removed the
+  field, its two write sites, the four dead assertions, and fixed the three docs that had
+  described it as a real capability rather than dead weight.
+- **§39 — `DESIGN.md` rebuilt around seven organizing questions, with a real, measured SLO
+  table.** Checked all seven user-proposed invariants against the actual code before writing
+  any down — six held, one ("the index records model/document versions") didn't, flagged
+  explicitly rather than written as if true; user chose to drop it rather than implement it.
+  Rewrote the whole doc trimming discovery-narrative language (that evidence trail already
+  lives in `TRANSCRIPT.md`) — 480→335 lines despite two new sections. The new SLO table is
+  gathered from an actual instrumented run of the live system, not estimated: 41/46 (89%)
+  correct-final-answer, 11/11 retrieval-correct (offline), and — after one run's single
+  false rejection wasn't enough sample per this project's own "single runs mislead" rule — 3
+  additional live reps specifically to measure that rate properly (3/32, 9%, all three
+  clustering on the same already-open carve-out ticket). User's own manual edits afterward
+  orphaned a Contents anchor; flagged rather than silently fixed, then removed on confirmation.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →
