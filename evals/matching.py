@@ -181,3 +181,36 @@ def matches(expected, result: VerifiedAnswer) -> bool:
         # draft's dumped verifier reasoning can echo almost anything from the source excerpts).
         return result.grounded and any(word in lowered for word in HEDGE_MARKERS)
     return result.grounded and _numeric_boundary_matches(expected, result.text)
+
+
+def explain(expected, result: VerifiedAnswer) -> str:
+    """Human-readable reason `expected` didn't match `result`, for eval-failure printing.
+    Only meaningful to call when matches(expected, result) is already False."""
+    if not isinstance(expected, Expectation):
+        return f"expected marker: {expected!r}"
+
+    reasons = []
+    if expected.numeric is not None and not _matches_numeric_expectation(expected.numeric, result):
+        found = _normalize_numbers(result.text)
+        reasons.append(f"numeric: expected {expected.numeric!r}, found {found or 'no numbers'}")
+    if expected.unknown and not (result.grounded and any(m in result.text.lower() for m in UNKNOWN_MARKERS)):
+        reasons.append("unknown: expected explicit unknown wording with grounded=True")
+    if expected.hedge and not (result.grounded and any(w in result.text.lower() for w in HEDGE_MARKERS)):
+        reasons.append("hedge: expected explicit hedge wording with grounded=True")
+    if expected.rejected and result.grounded:
+        reasons.append("rejected: expected grounded=False")
+    if expected.doc_type is not None and not any(c.doc.doc_type == expected.doc_type for c in result.cited_chunks):
+        cited = {c.doc.doc_type for c in result.cited_chunks}
+        reasons.append(f"doc_type: expected {expected.doc_type!r}, cited {cited or 'nothing'}")
+    if expected.version_year is not None and not any(c.doc.version_year == expected.version_year for c in result.cited_chunks):
+        cited = {c.doc.version_year for c in result.cited_chunks}
+        reasons.append(f"version_year: expected {expected.version_year!r}, cited {cited or 'nothing'}")
+    if expected.required:
+        missing = [t for t in expected.required if not _numeric_boundary_matches(t, result.text)]
+        if missing:
+            reasons.append(f"required: missing {missing}")
+    if expected.forbidden and result.grounded:
+        present = [t for t in expected.forbidden if t in result.text]
+        if present:
+            reasons.append(f"forbidden: found {present}")
+    return "; ".join(reasons) if reasons else "expectation did not match (no specific sub-check failure detected)"

@@ -5,7 +5,7 @@ import sys
 
 from ingest import build_index
 from src.agent import answer_question
-from evals.matching import matches
+from evals.matching import explain, matches
 
 # Entity resolution: one representative case per distinct lexical/semantic mechanism, not
 # per jurisdiction — typo/casing/abbreviation exercise the same retrieval code path
@@ -107,12 +107,12 @@ def main() -> None:
             result = answer_question(question, index)
             print(f"Q: {question}\n{result.text}\n{'-' * 80}")
             if not matches(expected, result):
-                failures.append((category, question, expected, result.text))
+                failures.append((category, question, expected, result))
 
     if failures:
         print(f"\n{len(failures)} of {total} edge cases did not match expectations:")
-        for cat, q, exp, got in failures:
-            print(f"  [{cat}] Q: {q}\n  expected marker: {exp!r}\n  got: {got}\n")
+        for cat, q, exp, result in failures:
+            print(f"  [{cat}] Q: {q}\n  {explain(exp, result)}\n  got: {result.text}\n")
         sys.exit(1)
 
     print(f"\nAll {total} edge cases matched expectations.")

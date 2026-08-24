@@ -5,7 +5,7 @@ import sys
 
 from ingest import build_index
 from src.agent import answer_question
-from evals.matching import matches
+from evals.matching import explain, matches
 
 EXPECTED = [
     ("What is the PTO allowance for a Taiwanese employee?", "12"),
@@ -30,12 +30,12 @@ def main() -> None:
         result = answer_question(question, index)
         print(f"Q: {question}\n{result.text}\n{'-' * 80}")
         if not matches(expected, result):
-            failures.append((question, expected, result.text))
+            failures.append((question, expected, result))
 
     if failures:
         print(f"\n{len(failures)} of {len(EXPECTED)} queries did not match expectations:")
-        for q, exp, got in failures:
-            print(f"  Q: {q}\n  expected marker: {exp!r}\n  got: {got}\n")
+        for q, exp, result in failures:
+            print(f"  Q: {q}\n  {explain(exp, result)}\n  got: {result.text}\n")
         sys.exit(1)
 
     print(f"\nAll {len(EXPECTED)} queries matched expectations.")

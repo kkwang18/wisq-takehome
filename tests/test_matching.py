@@ -244,3 +244,29 @@ def test_expectation_forbidden_is_skipped_on_an_ungrounded_rejection():
         "flagged: UNSUPPORTED: the draft wrongly named Singapore as covered."
     )
     assert matches(Expectation(forbidden=["Singapore"]), _result(rejection_text, grounded=False))
+
+
+from evals.matching import explain
+
+
+def test_explain_reports_plain_marker_unchanged():
+    assert explain("12", _result("15 days")) == "expected marker: '12'"
+
+
+def test_explain_reports_numeric_mismatch():
+    msg = explain(Expectation(numeric="50"), _result("The gym reimbursement is $30 per month."))
+    assert "numeric" in msg
+    assert "50" in msg
+
+
+def test_explain_reports_forbidden_term_found():
+    msg = explain(Expectation(forbidden=["Singapore"]), _result("Covers China, Japan, Taiwan, and Singapore."))
+    assert "forbidden" in msg
+    assert "Singapore" in msg
+
+
+def test_explain_reports_doc_type_mismatch():
+    result = _result("15 days per year.", cited_chunks=[_GLOBAL_CHUNK])
+    msg = explain(Expectation(doc_type="regional_handbook"), result)
+    assert "doc_type" in msg
+    assert "regional_handbook" in msg
