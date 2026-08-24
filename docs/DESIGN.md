@@ -1,38 +1,60 @@
 # Wisq: RAG Q&A System Design
 
-This is the current, as-built design of the Acme HR benefits Q&A system. Doc covers what each piece does, why it's built that way, what it costs, and what to do before this needs to handle a bigger corpus or more traffic. System is a CLI that answers employee questions against three Acme HR handbook `.docx` files using retrieval-augmented generation.
-
-Two constraints govern every decision in this doc:
-- Retrieve, don't stuff. Every claim in an answer traces back to a chunk actually returned by a search call.
-- Never fabricate. If the retrieved excerpts don't resolve the question, the system says unknown or hedges. It doesn't guess.
-
-Three things make this corpus harder than generic RAG: two nearly-identical global handbook versions (2025 vs. 2026) that differ only in a few numbers, a regional handbook that overrides the global one for exactly one benefit type (PTO) and defers to it for everything else, and jurisdiction names in questions ("Asia") that are broader than what the regional handbook actually covers (China, Japan, Taiwan). If you're new to this repo: read "Life of a query" below first, then skim the component section that matches whatever you're about to touch.
+Wisq answers employee questions about Acme's HR benefits by retrieving relevant excerpts from
+three handbook `.docx` files and having Claude answer strictly from what was retrieved,
+grounded and version/jurisdiction-aware — not from prior knowledge and not from a document
+pasted wholesale into the prompt. This document covers what the system does, the guarantees it
+holds, its architecture, why the major decisions were made, how it fails, what changes at
+scale, and how correctness is measured.
 
 ## Contents
 
-- [Repo map](#repo-map)
-- [Life of a query](#life-of-a-query)
+- [System Goals & Invariants](#system-goals--invariants)
+- [Non-goals](#non-goals)
+- [What does the system do?](#what-does-the-system-do)
 - [Architecture](#architecture)
-- [Core components](#core-components)
-  1. [Document ingestion — `src/docx_reader.py`](#1-document-ingestion--srcdocx_readerpy)
-  2. [Chunking — `src/chunking.py`](#2-chunking--srcchunkingpy)
-  3. [Embedding & retrieval — `src/retrieval.py`](#3-embedding--retrieval--srcretrievalpy)
-  4. [Agent loop & structured tool contracts — `src/agent.py`](#4-agent-loop--structured-tool-contracts--srcagentpy)
-  5. [Verification — `src/verification.py`](#5-verification--srcverificationpy)
-  6. [Evaluation harness — `evals/` and `tests/`](#6-evaluation-harness--evals-and-tests)
-- [Design principles that cut across every component](#design-principles-that-cut-across-every-component)
-- [Known limitations](#known-limitations)
-- [Path to scale — what to target next](#path-to-scale--what-to-target-next)
-  1. [Observability](#1-observability--nothing-exists-today-needed-before-any-real-deployment)
-  2. [Eval harness rigor](#2-eval-harness-rigor--replace-substring-heuristics-before-they-hide-something-real)
-  3. [Vector DB migration](#3-vector-db-migration--designed-and-prototype-verified-deferred-until-the-corpus-grows)
-  4. [LLM-assisted (semantic) chunking](#4-llm-assisted-semantic-chunking--same-shape-as-3)
-  5. [Cost & latency at volume](#5-cost--latency-at-volume)
-  6. [Service-ification and concurrency](#6-service-ification-and-concurrency)
-  7. [Document lifecycle at scale](#7-document-lifecycle-at-scale)
+- [Why the major decisions were made](#why-the-major-decisions-were-made)
+- [Known failure modes](#known-failure-modes)
+- [What happens when it scales?](#what-happens-when-it-scales)
+- [How do we know it's correct?](#how-do-we-know-its-correct)
 - [Where to find more](#where-to-find-more)
 
-## Repo map
+## System Goals & Invariants
+
+- **Grounding:** every factual claim must be supported by retrieved evidence.
+- **Closed-world behavior:** the model cannot use external/pretrained knowledge to answer.
+- **Version correctness:** a question must not mix conflicting handbook versions.
+- **Jurisdiction correctness:** regional rules apply only where explicitly applicable.
+- **Fail closed:** insufficient or unverifiable evidence produces a safe fallback.
+- **Deterministic interface:** LLM outputs consumed by code use structured tool schemas.
+
+These are enforced by the mechanisms in "Why the major decisions were made" below, not just
+stated as intent — but the enforcement is layered defense, not a formal proof; see
+"How do we know it's correct?" for what "never knowingly ungrounded" actually means here.
+
+## Non-goals
+
+- Not a general-purpose HR chatbot.
+- Not an authoritative source outside the indexed handbooks.
+- Does not answer questions requiring information absent from the corpus.
+- Does not infer undocumented company policy.
+- Does not currently support arbitrary document uploads at runtime.
+- Does not guarantee zero hallucinations; it uses layered grounding checks and fails closed
+  when evidence cannot be verified.
+
+## What does the system do?
+
+A CLI that answers employee questions against three Acme HR handbook `.docx` files using
+retrieval-augmented generation instead of stuffing full documents into the prompt: every claim
+must trace back to a chunk actually returned by a search call.
+
+Three things make this corpus harder than generic RAG, and shape most of the design below: two
+nearly-identical global handbook versions (2025 vs. 2026) that differ only in a few numbers; a
+regional handbook that overrides the global one for exactly one benefit type (PTO) and defers
+to it for everything else; and jurisdiction names in questions ("Asia") that are broader than
+what the regional handbook actually covers (China, Japan, Taiwan).
+
+## Architecture
 
 | Path | What it is |
 |---|---|
@@ -52,10 +74,31 @@ Three things make this corpus harder than generic RAG: two nearly-identical glob
 
 Setup and day-to-day commands are in `README.md` — this doc doesn't repeat them.
 
-## Life of a query
+```mermaid
+flowchart LR
+    subgraph Ingest["ingest.py (run once, or on doc change)"]
+        A[documents.yaml] --> B[docx_reader.py<br/>raw XML → paragraphs]
+        B --> C[chunking.py<br/>paragraphs → chunks]
+        C --> D[retrieval.py<br/>embed_text + SentenceTransformer]
+        D --> E[(index/<br/>chunks.jsonl + embeddings.npy)]
+    end
+```
 
-The fastest way to understand the system is to trace `python main.py --ask "What is the PTO
-allowance for a Taiwanese employee?"` end to end:
+```mermaid
+flowchart TD
+    Q[question] --> AQ[answer_question<br/>src/agent.py]
+    E[(index/)] -.loaded at startup.-> AQ
+    AQ -->|search_handbooks| VI[VectorIndex.search]
+    VI --> AQ
+    AQ -->|submit_answer tool call| FA[format_answer<br/>deterministic assembly]
+    FA --> VA[verify_answer<br/>src/verification.py]
+    VA -->|report_verification tool call| VLC[verify_llm_call]
+    VLC --> VA
+    VA --> ANS[final answer text]
+```
+
+**Life of a query** — tracing `python main.py --ask "What is the PTO allowance for a
+Taiwanese employee?"` end to end:
 
 1. `main.py` loads the prebuilt index (`VectorIndex.load("index")`) and calls
    `answer_question()`.
@@ -82,332 +125,211 @@ allowance for a Taiwanese employee?"` end to end:
 8. `main.py` prints `result.text`.
 
 Two full Claude round-trips minimum (search+answer, then verify) is a deliberate cost — see
-"Design principles," below.
+"Why the major decisions were made," below.
 
-## Architecture
+## Why the major decisions were made
 
-```mermaid
-flowchart LR
-    subgraph Ingest["ingest.py (run once, or on doc change)"]
-        A[documents.yaml] --> B[docx_reader.py<br/>raw XML → paragraphs]
-        B --> C[chunking.py<br/>paragraphs → chunks]
-        C --> D[retrieval.py<br/>embed_text + SentenceTransformer]
-        D --> E[(index/<br/>chunks.jsonl + embeddings.npy)]
-    end
-```
-
-```mermaid
-flowchart TD
-    Q[question] --> AQ[answer_question<br/>src/agent.py]
-    E[(index/)] -.loaded at startup.-> AQ
-    AQ -->|search_handbooks| VI[VectorIndex.search]
-    VI --> AQ
-    AQ -->|submit_answer tool call| FA[format_answer<br/>deterministic assembly]
-    FA --> VA[verify_answer<br/>src/verification.py]
-    VA -->|report_verification tool call| VLC[verify_llm_call]
-    VLC --> VA
-    VA --> ANS[final answer text]
-```
-
-## Core components
-
-### 1. Document ingestion — `src/docx_reader.py`
+### Document ingestion — `src/docx_reader.py`
 
 **Choice:** read `word/document.xml` directly via stdlib `zipfile` + `ElementTree`, not
 `python-docx`.
 
 **Why:** `python-docx`'s `Document.paragraphs` only returns top-level body paragraphs and
-silently drops anything nested in a table. The real handbooks' section headers live
-inside single-cell "banner" tables, which would have dropped every header in this corpus.
-Walking the raw XML directly visits every paragraph regardless of nesting, so nothing is lost.
+silently drops anything nested in a table. The real handbooks' section headers live inside
+single-cell "banner" tables, which would have dropped every header in this corpus. Walking the
+raw XML directly visits every paragraph regardless of nesting.
 
-**Tradeoff:** more code than a one-line `python-docx` call, and coupled to the OOXML schema —
-accepted because silent data loss is a worse failure mode than ~20 extra lines, and the
-schema is stable enough not to be fragile in practice.
+**Tradeoff:** more code and coupling to the OOXML schema, accepted because silent data loss is
+the worse failure mode.
 
-### 2. Chunking — `src/chunking.py`
+### Chunking — `src/chunking.py`
 
-**Choice:** one non-empty paragraph = one chunk (`chunk_document()`), tagged with the nearest
-preceding heading (recognized by paragraph style plus a length guard, since one document's
-real body paragraphs share a style with its headers). Specific sections can opt into
-sentence-level splitting instead, via `documents.yaml` (`DocMeta.split_sentences_in_sections`)
-— today only APAC's `SCOPE` section uses it.
+**Choice:** one non-empty paragraph = one chunk, tagged with the nearest preceding heading
+(style plus a length guard, since the two document families use inconsistent heading
+conventions). Specific sections can opt into sentence-level splitting instead, via
+`documents.yaml` — today only APAC's `SCOPE` section uses it.
 
-**Why:** the two document families use different, inconsistent heading conventions, so a
-style-only rule alone misclassifies real body content as headers — the length guard fixes
-that without per-document special-casing. Sentence-splitting is scoped rather than
-corpus-wide because a full corpus-wide split was tried first and reverted: it nearly doubled
-the chunk count and regressed an already-passing retrieval test by diluting search results
-with mostly-redundant fragments elsewhere. A targeted opt-in for the one confirmed-diluted
-section fixed the same underlying problem without that cost.
+**Why:** sentence-splitting is scoped to that one confirmed-diluted section, not corpus-wide —
+a corpus-wide version regressed retrieval quality elsewhere without fixing anything a
+targeted opt-in didn't already fix.
 
 **Tradeoff:** a policy split across two consecutive paragraphs under one heading can still
-lose part of its meaning to a different chunk, since chunking is otherwise strictly
-one-paragraph-per-chunk — not yet hit beyond the one already-fixed case, but a real structural
-limit of the approach worth re-checking if the corpus grows.
+lose part of its meaning to a different chunk, since chunking is strictly one-paragraph-per-
+chunk — a real structural limit worth re-checking if the corpus grows.
 
-### 3. Embedding & retrieval — `src/retrieval.py`
+### Embedding & retrieval — `src/retrieval.py`
 
 **Choice:** `VectorIndex` is a list of chunks plus a plain `numpy` array of normalized
 embeddings — cosine similarity via `np.dot`, no vector database (`SEARCH_K = 10`).
-Disambiguation happens two ways: `embed_text()` prepends a metadata header (document,
-jurisdiction, version year, section) to each chunk before embedding, and `search()` also
-accepts explicit `doc_type`/`version_year` filters Claude can apply once it's resolved a year
-or jurisdiction from the question.
+`embed_text()` prepends a metadata header (document, jurisdiction, version year, section) to
+each chunk before embedding, and `search()` also accepts explicit `doc_type`/`version_year`
+filters.
 
 **Why:** the 2025 and 2026 PTO paragraphs are nearly word-for-word identical except the day
-count — nothing in the raw text distinguishes them, so embedding similarity alone can't
-reliably tell them apart. The header and the filters are two independent ways to break that
-tie. Plain `numpy` was verified rather than assumed sufficient: a Chroma + hybrid-search
-prototype run against the real corpus and a 10-query adversarial battery found no case the
-simpler system missed.
+count, so embedding similarity alone can't reliably tell them apart — the header and filters
+are two independent ways to break that tie. Plain `numpy` was verified against a Chroma +
+hybrid-search prototype before being kept; see `docs/backlog/2026-08-20-vector-db-migration-for-scale.md`.
 
-**Tradeoff:** `version_year=None` on a chunk has to mean "matches any year filter" rather than
-"only when unfiltered," since APAC's regional handbook is evergreen — an easy footgun that
-would otherwise silently drop regional content from year-scoped queries. And plain `numpy`
-won't hold indefinitely; a vector-DB migration is fully designed and ready to implement once
-the corpus outgrows a linear scan (`docs/backlog/2026-08-20-vector-db-migration-for-scale.md`).
+**Tradeoff:** `version_year=None` on a chunk has to mean "matches any year filter," since
+APAC's regional handbook is evergreen — an easy footgun if inverted. Plain `numpy` won't hold
+indefinitely; a vector-DB migration is designed and ready once the corpus outgrows a linear
+scan.
 
-The embedding model also loads on a background thread (`preload_model()`) so its ~6s one-time
-cost overlaps with the first Claude round-trip instead of blocking after it — a free latency
-win with no behavior tradeoff. A related attempt to also batch multiple search calls into one
-turn was reverted after it destabilized `verify_answer` on absence-based questions; not worth
-a correctness risk for an unconfirmed latency gain.
+### Agent loop & structured tool contracts — `src/agent.py`
 
-### 4. Agent loop & structured tool contracts — `src/agent.py`
+**Choice:** `answer_question()` drives a multi-hop Claude tool-use loop (`claude-sonnet-5`, no
+`temperature` — this model rejects non-default sampling params) with two forced tools:
+`search_handbooks` and `submit_answer` (three fields — `verdict`/`reason`/`citation` — called
+once when ready). The verifier uses the same tool-schema pattern for its own classification.
 
-**Choice:** `answer_question()` drives a multi-hop Claude tool-use loop
-(`claude-sonnet-5`, no `temperature` — this model rejects non-default sampling params) with
-two tools, both forced via `tool_choice={"type": "any"}` so Claude can never end a turn
-without calling one: `search_handbooks` (free-text query + optional `doc_type`/`version_year`
-filters) and `submit_answer` (three fields — `verdict`/`reason`/`citation` — called once when
-ready to answer). The verifier (component 5) uses the same tool-schema pattern for its own
-classification.
+**Why:** free chat text produced inconsistent formatting under live sampling. A tool schema
+makes the shape a code guarantee instead of a prompt request — `format_answer()`
+deterministically assembles the three submitted fields, and the layout is unit-testable
+offline with zero API calls.
 
-**Why:** free chat text proved unreliable under live sampling — the same compound question
-came back one run as a bulleted list with intro/outro framing, another as flowing prose with
-the citation jammed onto the reason sentence, despite explicit prompt instructions; a
-free-text verifier separately once reasoned past its own leading SUPPORTED/UNSUPPORTED token,
-breaking a naive prefix check. A tool schema makes the shape a code guarantee instead of a
-prompt request — `format_answer()` deterministically assembles the three submitted fields —
-and made the layout itself unit-testable offline with zero API calls, which a prompt
-instruction never could be.
+**Tradeoff:** more moving parts, and this only closes formatting/classification failures — it
+doesn't make the model's underlying reasoning more correct, just more reliably shaped.
+`MAX_TOOL_ITERATIONS = 8` caps the search loop; the `reason` field is instructed not to reveal
+per-branch outcomes of a hedge, which is an instruction, not a schema constraint, and so
+retains some residual sampling variance.
 
-**Tradeoff:** more moving parts (three tool schemas instead of free text), and this only
-closes formatting/classification failures — it doesn't make the model's underlying reasoning
-more correct, just more reliably shaped once it's decided what to say.
-
-Two smaller rules round out the loop: `MAX_TOOL_ITERATIONS = 8` caps the search loop above the
-highest round count observed live for a legitimately thorough question, so it only trips on
-genuine non-convergence; and the `reason` field is explicitly forbidden from revealing what
-the answer would be under each possible resolution of a hedge (including citing both
-candidates' numbers as "background," which live testing showed the model would otherwise do
-to let the reader compute the withheld answer) — this needed two rounds of live strengthening
-before holding reliably, and likely retains some residual sampling variance since it's an
-instruction, not a schema constraint.
-
-### 5. Verification — `src/verification.py`
+### Verification — `src/verification.py`
 
 **Choice:** `verify_answer()` is a second, independent LLM pass — given the draft and only the
-chunks actually cited, ask whether every claim is directly supported. Two deterministic
-checks run first with no LLM call: `grounded=False` if no excerpts were cited at all, or if
-the draft's citation doesn't name any retrieved document. The verifier prompt also explicitly
-credits three inference patterns as valid rather than "unresolved conflicts" — a specific rule
-carving itself out of a general fallback, a general default with no specific override, and a
-closed enumerated list with an explicit "everyone else, refer elsewhere" instruction.
+chunks actually cited, ask whether every claim is directly supported. Deterministic checks run
+first with no LLM call: `grounded=False` if no excerpts were cited, or if the draft's citation
+doesn't name any retrieved document. The verifier prompt also explicitly credits three
+inference patterns as valid rather than "unresolved conflicts" — a specific rule carving
+itself out of a general fallback, a general default with no specific override, and a closed
+enumerated list with an explicit "everyone else, refer elsewhere" instruction.
 
 **Why:** this pass is the system's actual anti-hallucination enforcement, not just the system
-prompt's instructions — the prompt has leaked pretrained knowledge before (a draft once named
-countries that appear nowhere in the corpus), and this pass caught and rejected it before the
-user saw it. The three credited patterns exist because the verifier initially under-credited
-all of them, intermittently rejecting correct drafts that were valid logical consequences of
-the excerpts rather than direct restatements of them.
+prompt's instructions — the prompt has leaked pretrained knowledge before, and this pass
+caught and rejected it. The three credited patterns exist because the verifier initially
+under-credited valid logical consequences of the excerpts as unsupported.
 
 **Tradeoff:** a full second API round-trip per question — real latency and cost, accepted as
-the price of the "never fabricate" requirement. Each credited pattern also needed adversarial
-testing (inverted-direction and fabricated-number controls) before shipping, since crediting
-more inference patterns risks making the verifier too lenient toward genuinely wrong drafts —
-and even so, one pattern has since resurfaced live and remains only analytically (not freshly)
-reproduced (`docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md`).
+the price of "never knowingly return an ungrounded answer." Each credited pattern needed
+adversarial testing before shipping, since crediting more inference patterns risks making the
+verifier too lenient — and even so, one pattern has resurfaced live and remains open
+(`docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md`).
 
-### 6. Evaluation harness — `evals/` and `tests/`
+### Cross-cutting principles
 
-**Choice:** two different kinds of correctness check, kept separate. `tests/` is offline,
-zero API calls, real local embeddings — the regression guard for chunking/retrieval/matching
-changes. `evals/` is live-API: `eval.py` runs the 8 take-home queries on every meaningful
-change; `edge_cases.py` is a 38-case production-readiness suite run on demand given its real
-API cost (~38 questions × 3-5 Claude calls each).
+- **Guarantee structurally, not by prompt request**, whenever downstream code depends on a
+  specific output shape — reach for a tool schema, not a prompt instruction and hope.
+- **Fail closed, not open, on grounding** — the system would rather under-answer than
+  fabricate.
+- **Prefer the narrowest fix confirmed to work** over a more general one that "should" work —
+  applies to the chunking decision above and to every scale-motivated decision deferred below.
+- **Config over code branching** — `documents.yaml` governs which documents are active and
+  which sections get sentence-split.
+- **Every non-trivial prompt or logic change gets a live-verification pass before landing** —
+  offline tests can't catch LLM sampling variance.
 
-**Why:** offline tests are cheap enough to run constantly and catch retrieval/logic
-regressions instantly; live evals are the only way to catch LLM sampling-variance bugs, but
-cost real time and money, so they're reserved for meaningful changes rather than every commit.
-
-**Tradeoff:** `evals/matching.py`'s matcher (`matches()`) combines plain substring/keyword
-markers (still fully supported, unchanged) with a structured `Expectation` type — numeric
-equivalence, unknown/hedge/rejected as distinct outcomes, document/version correctness against
-real retrieval metadata, required/forbidden claims — deterministic throughout, no LLM calls in
-the harness itself. Both forms have caught real bugs (numeric markers matching inside a larger
-number; a rejected answer "passing" by accidental substring coincidence; the old plain
-`"unknown"` marker silently accepting a verifier rejection as if it were a confirmed unknown
-answer, all since fixed) but the plain-string form remains gameable by phrasing, and even
-`Expectation`'s document/version checks are a weaker precondition than they look
-(`docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`). Treat a green
-eval run as a smoke test, not a strict regression gate.
-
-## Design principles that cut across every component
-
-These aren't componentized — they're decisions that shaped multiple pieces of the system and
-should shape whatever gets built next in it.
-
-- **Guarantee structurally, not by prompt request, whenever downstream code depends on a
-  specific output shape.** The `submit_answer`/`format_answer` and `report_verification`/enum
-  fixes are the clearest examples: two separate real bugs, same root cause (parsing free
-  text), same fix pattern (tool schema constrains the shape; code assembles the final string).
-  Apply this reflexively the next time an LLM's output needs to be reliably parseable —
-  don't write a prompt instruction and hope.
-- **Fail closed, not open, on grounding.** Empty `cited_chunks` → hard rejection, no LLM call.
-  An unsupported verdict → a "can't confirm" fallback, never the ungrounded draft. The system
-  would rather under-answer than fabricate.
-- **Prefer the narrowest fix that's confirmed to work over a more general one that "should"
-  work.** The chunking section above is the clearest example — a corpus-wide sentence-split
-  regressed a passing test; a manifest-scoped one-section fix didn't. This shows up again in
-  the vector-DB and LLM-chunking decisions: both were prototyped against the real corpus
-  before being deferred, not assumed unnecessary.
-- **Config over code branching.** `documents.yaml` governs which documents are active and
-  which sections get sentence-split; adding, deprecating, or exempting a document is a
-  manifest edit, not a code change.
-- **Every non-trivial prompt or logic change gets a live-verification pass before landing**,
-  not just an offline test pass — offline tests can't catch LLM sampling variance, and this
-  codebase has repeatedly found real bugs (verdict ordering, verifier false-rejections, the
-  formatting bugs above) that only a live rerun surfaces. Multiple reps, not one — single live
-  runs have been misleading more than once in this project's history (see
-  `docs/TRANSCRIPT.md` for the full record).
-
-## Known limitations
-
-Organized by what kind of risk they carry, not by when they were found (`docs/TRANSCRIPT.md`
-has the full chronological narrative, and `docs/HISTORY.md` a short index into it, if you want
-that instead).
+## Known failure modes
 
 **Correctness / reliability**
 
 - A policy split across two consecutive paragraphs under one heading can still lose its
-  second half — chunking is strictly one-paragraph-per-chunk, and the fix for the one
-  confirmed case (`SCOPE`) was a `SEARCH_K` widen, not a structural fix for the general shape.
-  A systematic grep of the corpus for similar scope/exception language found no second
-  instance — every other candidate ranks comfortably inside `SEARCH_K`. Confirmed absent
-  today, not proven absent forever — re-check the same way if the corpus grows.
+  second half — chunking is strictly one-paragraph-per-chunk. Confirmed absent in the current
+  corpus today (systematic grep found no second instance beyond the one already-fixed case),
+  not proven absent forever.
 - Live draft-time named-entity hallucination (inventing plausible-sounding but never-retrieved
   entity names) was found and given a restrictive system-prompt fix, but only 7 live
   reproductions back it — too small a sample to prove the fix against a rare event. See
   `docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`.
 - `verify_answer` can over-generalize a sibling benefit's specific carve-out into false
-  suspicion of a *different* benefit that the same excerpt explicitly routes to the general
-  rule (e.g. treating the APAC gym rate as if it needed PTO-style regional precedence, when
-  the excerpt explicitly says "for all other benefits, refer to" the global rule). Root cause
-  confirmed analytically (the original rejections self-describe the over-generalization in
-  their own reasoning text), but 44 live reps across two reproduction methodologies couldn't
-  re-trigger the specific pattern fresh — no clean before/after baseline exists to test a fix
-  against, so one is deliberately not shipped yet. See
-  `docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md`'s
-  "Root cause investigation" section for the full account.
+  suspicion of a *different* benefit the same excerpt explicitly routes to the general rule.
+  Root cause confirmed analytically and reproduced live twice, but no controlled before/after
+  baseline exists yet to test a fix against. See
+  `docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md`.
+- `verify_answer` itself is probabilistic — it can intermittently reject a genuinely correct
+  draft (a false rejection, not a fabrication) even outside the pattern above. See "How do we
+  know it's correct?" for a measured rate.
 
 **Test/eval harness gaps**
 
 - The word markers in `evals/matching.py` (`"unknown"`, `"which country"`, etc.) are
-  substring/keyword matching on free-form text, not semantic — gameable by construction,
-  already needed reactive patching as real phrasing varied.
+  substring/keyword matching on free-form text, not semantic — gameable by construction.
+- `Expectation.doc_type`/`version_year` checks (`evals/matching.py`) are a weaker precondition
+  than they look — they check whether a matching document was retrieved anywhere in the
+  conversation, not that the final answer's figure actually came from it. See
+  `docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`.
 
-## Path to scale — what to target next
+## What happens when it scales?
 
 Ranked by what would break first if this stopped being a take-home and started being a real
 service, not by how long each has been on the backlog.
 
-### 1. Observability — nothing exists today, needed before any real deployment
+1. **Observability** — nothing exists today: no logging of retrieval scores, tool-call
+   sequences, `verify_answer` accept/reject rates, or latency/cost per question. The single
+   biggest gap between "works when I run it live and read the output" and "operable as a
+   service." Trigger: before onboarding any real user traffic.
+2. **Eval harness rigor** — largely addressed (a deterministic `Expectation` type replaced most
+   of the keyword-matching risk); one precision gap remains, documented above and in
+   `docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`.
+3. **Vector DB migration** — designed and prototype-verified against the real corpus, found no
+   accuracy or performance win at the current ~73-chunk size. Trigger: corpus size, not
+   calendar time. `docs/backlog/2026-08-20-vector-db-migration-for-scale.md`.
+4. **LLM-assisted (semantic) chunking** — two prototypes confirmed real differentiating value,
+   but neither was needed to fix any gap found in this specific 3-document corpus. Trigger: a
+   new document whose structure the current paragraph/heading rules can't safely assume.
+   `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`.
+5. **Cost & latency at volume** — two full Claude round-trips per question is a deliberate
+   grounding tradeoff, acceptable at take-home volume. Prompt caching was investigated and
+   shelved (97% of per-question time is Claude generation, not input reprocessing — caching
+   saves cost, not the latency that motivated the question).
+6. **Service-ification and concurrency** — `main.py` is a synchronous CLI, one process per
+   question. A real service needs a long-lived process serving concurrent requests against one
+   loaded index, and request-level timeout/retry/backoff, which doesn't exist today — an API
+   error or rate limit currently just propagates as an exception.
+7. **Document lifecycle at scale** — `documents.yaml` is hand-edited today. Growing to many
+   more handbooks needs validation that a new manifest entry doesn't silently conflict with an
+   existing one, and a decision on whether re-ingestion should trigger from a document-upload
+   flow rather than a manual CLI run.
 
-There is currently no logging of retrieval scores, tool-call sequences, `verify_answer`
-accept/reject rates, or latency/cost per question. This is the single biggest gap between
-"works when I run it live and read the output" and "operable as a service." Before anything
-else on this list: structured logging of each stage (search queries + top-k scores, submitted
-verdict/reason/citation, verify accept/reject + reason), and a way to sample real production
-answers for grounding-accuracy review the same way this project's live-verification passes
-have been done manually all along. Trigger: before onboarding any real user traffic, not
-after.
+## How do we know it's correct?
 
-### 2. Eval harness rigor — largely addressed; one precision gap remains, documented not fixed
+Two different kinds of check, kept separate. `tests/` is offline, zero API calls, real local
+embeddings — the regression guard for chunking/retrieval/matching changes (111 tests).
+`evals/` is live-API: `eval.py` runs the 8 take-home queries on every meaningful change;
+`edge_cases.py` is a 38-case production-readiness suite (entity resolution, negative space,
+grounding, consistency, precedence generalization, entity-hallucination guard) run on demand
+given its real API cost. Offline tests catch retrieval/logic regressions instantly; only a
+live run catches LLM sampling-variance bugs — this codebase has repeatedly found real bugs
+(verdict ordering, verifier false-rejections, formatting inconsistency) that only live reruns
+surfaced. Treat a green eval run as a smoke test, not a strict regression gate — `matches()`'s
+word markers remain gameable by phrasing (see "Known failure modes").
 
-`evals/matching.py` caused or hid three real bugs before this was addressed: the
-numeric-boundary false-positive, a `grounded`-blind-spot, and the plain `"unknown"` marker's
-silent acceptance of a verifier rejection as a confirmed unknown answer — all fixed, the last
-one via the deliberately-chosen-deterministic `Expectation` type
-(`docs/superpowers/specs/2026-08-24-eval-matcher-redesign-design.md`), not an LLM-judge
-fallback (rejected explicitly: importing LLM sampling variance into the harness meant to catch
-that exact problem elsewhere in the system was judged worse than staying deterministic).
-Remaining gap, found by that same work's final review and deliberately deferred rather than
-fixed inline: `Expectation.doc_type`/`version_year` check against
-`VerifiedAnswer.cited_chunks`, which accumulates every chunk retrieved across a whole
-conversation, not just what the final answer cited — a weaker precondition than the checks
-appear to assert. See
-`docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md` for the two
-sketched fix directions. Trigger: before trusting a `PRECEDENCE` category pass as proof a
-specific document actually governed an answer, not just that it was retrieved.
+Because grounding is enforced by a second LLM pass, not a deterministic proof, correctness is
+a measured property, not a guarantee. Below are real numbers from this system, not targets —
+this project has no committed SLOs yet (see "Observability" above), just the best current
+measurement of each metric.
 
-### 3. Vector DB migration — designed and prototype-verified, deferred until the corpus grows
+| Metric | Measured value | Method / sample |
+|---|---|---|
+| Retrieval correct @ K (K≤10) | **11/11 (100%)** | Offline, deterministic: known-answer, entity-resolution-variant, and precedence-rule retrieval probes (`tests/test_retrieval_recall.py`, `tests/test_retrieval_entity_resolution.py`) |
+| Correct final answer | **41/46 (89%)** | Single live rep, `eval.py` (8) + `edge_cases.py` (38), 2026-08-24. Of the 5 non-matches: 1 is a confirmed false rejection (below); the other 4 are correctly-grounded, non-fabricating answers that missed the eval matcher's specific keyword phrasing — a harness precision gap, not a system error (see "Known failure modes") |
+| Unsupported-question decline rate | **7/7 (100%)** | Same run: every deliberately-unanswerable question (`grounding` + `negative_space` categories) got a grounded, non-fabricating "no data" response; the matcher recognized the specific wording in 5/7 |
+| False rejection rate (flagship queries) | **3/32 (9%)** | 4 live reps of the 8 take-home queries, 2026-08-24. All 3 rejections cluster on gym-benefit precedence questions, matching the still-open pattern in `docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md` |
+| Latency (single question, warm process) | **p50 6.5s / p90 8.5s / p95 9.0s / max 16.0s** | Same 46-query run, wall-clock per `answer_question()` call (includes both Claude round-trips + retrieval) |
+| LLM/API transport failure rate | **0 observed** | 0 hard API errors/timeouts across the 70 live calls behind this table (46 + 24 above) — too small a sample and no dedicated retry/error telemetry exists yet to call this a measured rate (see "Observability" above) |
 
-`docs/backlog/2026-08-20-vector-db-migration-for-scale.md` has the full schema, indexing,
-filtering, and document-lifecycle design, verified against a live Chroma + hybrid-search
-prototype that found no accuracy or performance win at the current ~73-chunk size. This is the
-right item to pick up first once the corpus meaningfully grows — not before, since the
-prototype found nothing to gain yet. Trigger: corpus size, not calendar time.
-
-### 4. LLM-assisted (semantic) chunking — same shape as #3
-
-`docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`: two prototypes confirmed real
-differentiating value (sub-sentence exception splitting, cross-paragraph merging) that plain
-syntactic rules can't do, but neither was needed to fix any gap found in this specific
-3-document corpus. Trigger: a new document whose structure the current paragraph/heading
-rules can't safely assume — not before.
-
-### 5. Cost & latency at volume
-
-Two full Claude round-trips per question (multi-hop answer + separate verification) is a
-deliberate grounding trade-off today, acceptable at take-home query volume. At real traffic
-volume, revisit: prompt caching (investigated and shelved — `SYSTEM_PROMPT` + `SEARCH_TOOL`
-together clears Sonnet 5's 1024-token cache minimum, but 97% of per-question time is Claude
-generation, not input reprocessing, so caching saves cost, not the latency that motivated
-investigating it — worth a second look once call volume is high enough that the cost savings
-alone justify it), and whether `verify_answer`'s max_tokens=1000/thinking-disabled call can be
-made cheaper without weakening the check it exists to run.
-
-### 6. Service-ification and concurrency
-
-`main.py` is a synchronous CLI processing one question at a time; `VectorIndex` is loaded
-fresh per process. A real service needs: a long-lived process serving concurrent requests
-against one loaded index, request-level timeout/retry/backoff (none exists today — an API
-error or rate limit currently just propagates as an exception), and a decision on whether
-`answer_question`'s per-request Claude client needs connection pooling or per-request
-instantiation is fine at expected volume.
-
-### 7. Document lifecycle at scale
-
-`documents.yaml` today is hand-edited by whoever adds or deprecates a document, then
-`ingest.py` is re-run manually. Fine for three documents. Growing to many more handbooks,
-across more regions, likely needs: validation that a new manifest entry's declared
-`jurisdictions`/`version_year` don't silently conflict with an existing active document,
-and a decision on whether re-ingestion should be triggered by a document-management upload
-rather than a manual CLI run.
+Live-verification discipline (multiple reps, not one — see "Why the major decisions were
+made") is what has caught nearly every real bug in this project's history; the full
+decision-by-decision record, including every live rep count behind a fix, is in
+`docs/TRANSCRIPT.md`.
 
 ## Where to find more
 
 - **`CLAUDE.md`** — session-continuity notes for AI agents working in this repo: orientation,
-  the correctness contract, operating rules, and gotchas. Not a decision log — see below.
+  the correctness contract, operating rules, and gotchas.
 - **`docs/TRANSCRIPT.md`** — the full decision-by-decision narrative, in the exact order each
   decision was made, with the live evidence gathered before each one shipped, including dead
   ends that were tried and reverted. **`docs/HISTORY.md`** is a short, section-linked index
-  into it — start there to find the section you need.
+  into it — start there.
 - **`docs/backlog/`** — every deferred item referenced above, fully investigated: root cause,
-  suggested fix, risk, and test plan already written, not a one-line TODO.
+  suggested fix, risk, and test plan already written.
 - **`docs/superpowers/specs/2026-08-19-rag-qa-system-design.md`** — the original
-  pre-implementation proposal. **Superseded by this document** for how the system actually
-  works today; kept for historical context on what was planned before any of the live fixes
-  in this doc happened.
+  pre-implementation proposal. Superseded by this document; kept for historical context.
