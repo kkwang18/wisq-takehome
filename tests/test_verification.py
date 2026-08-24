@@ -70,6 +70,19 @@ def test_verify_answer_hard_fails_when_citation_names_no_retrieved_document():
     assert calls == []
 
 
+def test_verify_answer_rejects_when_doc_name_only_appears_outside_the_citation_field():
+    # The old check scanned the whole draft for a retrieved doc's name, so a document name
+    # mentioned in passing inside `reason` could mask a citation field that names a document
+    # that was never retrieved at all. Only the citation field should count.
+    calls = []
+    draft = "15 days per year.\n\nPer the Test Handbook's standard entitlement.\n\n— (Fake Handbook, Section 1)"
+    result = verify_answer(draft, [CHUNK], llm_call=lambda p: calls.append(p) or "SUPPORTED")
+    assert result.grounded is False
+    assert "citation" in result.text.lower()
+    assert result.rejected_draft == draft
+    assert calls == []
+
+
 def test_verify_answer_accepts_citation_naming_one_of_several_retrieved_documents():
     # A compound-question answer may cite only some of the documents actually searched — the
     # check only requires at least one match, not all of cited_chunks to be named.

@@ -1525,3 +1525,125 @@ and the explicit hold decision), appended the second draft-side-confusion recurr
 without re-writing them as if the fix had shipped, and updated `CLAUDE.md`/`DESIGN.md`'s
 one-line and "Known limitations" mentions (both previously said "not yet root-caused," now
 stale given the analytical confirmation).
+
+## 31. A live timing breakdown, then three exploratory architecture questions
+
+**User** asked for a single live query with a per-step timing breakdown, pasting the "Life of
+a query" doc section verbatim as the step list to measure against. Ran one instrumented live
+call and reported real per-step numbers, including the ~4.7s one-time
+`sentence_transformers`/library import cost separate from `answer_question()`'s own time.
+
+**User** then asked three exploratory questions in one message, answered conversationally
+(recommendation + main tradeoff each, no code changes):
+1. Would a long-lived process eliminate the ~4.7s import gap? Yes — it's a one-time
+   process-startup cost, not a per-question cost; `main.py`'s own 8-query loop already only
+   pays it once.
+2. What would a single-Claude-call version look like? Sketched the shape and the tradeoff:
+   collapsing search+answer+verify into one call would save a round-trip but give up the
+   independent-verification-pass design principle this project has repeatedly relied on to
+   catch real fabrications (§20) — recommended against it.
+3. What would per-employee privacy isolation need? Sketched the shape (per-employee document
+   scoping at retrieval time, not just prompt-level trust) without implementing anything —
+   flagged as a genuinely architectural change if ever pursued, not a bounded one.
+
+## 32. `docs/DESIGN.md` condensed to a strict Choice/Why/Tradeoff structure
+
+**User** asked to make `DESIGN.md` more concise for an external reader: keep "Life of a query"
+byte-identical, but condense every other section to design choice + 1-2 sentence why + 1-2
+sentence tradeoff, without deleting the evidence entirely. Condensed all six "Core components"
+subsections into that strict structure and trimmed one "Known limitations" bullet; file went
+from 480 to 398 lines. Republished the existing artifact (same URL, same file path) with the
+condensed content.
+
+## 33. `DESIGN.md`'s intro merged into one section, a table of contents added
+
+**User** asked to condense the title/intro/"System summary" split into one section and add a
+table of contents. Merged the three-part opening (title paragraph, "if you're new here"
+pointer, and the separate "## System summary" section) into a single flowing opening section,
+then added a "## Contents" section linking every top-level heading, with numbered sub-links
+for the multi-part "Core components" and "Path to scale" sections. Republished the artifact.
+
+The user then made a manual edit directly to the intro's wording on disk (shorter, more
+clipped sentences — "Doc covers what each piece does..." instead of the earlier full-sentence
+phrasing) between artifact-republish requests. Treated as a deliberate style choice, not
+reverted; republished as-is when asked again, and again after this session's citation-scoping
+change landed.
+
+## 34. Is the system overfit to `.docx`? What would CSV support need?
+
+**User** asked whether the codebase is overfit to `.docx`, and what other formats like CSV
+would need. Read `ingest.py`, `src/models.py`, and `src/chunking.py` before answering rather
+than guessing. Finding: ingestion is genuinely `.docx`-specific (`ingest.py` hardcodes
+`read_docx_paragraphs()`, no format dispatch exists), but everything downstream — chunking,
+retrieval, the agent loop, verification — is already format-agnostic, since none of it touches
+`.docx` internals; it only ever sees the plain `Paragraph`/`Chunk`/`DocMeta` dataclasses.
+Recommended against building a speculative format-dispatch layer now (YAGNI, consistent with
+how every other scale question in `docs/backlog/` has been handled) — the bounded fix, if a
+real second format shows up, is a new reader module producing `Paragraph`s plus an
+extension-based dispatch in `ingest.py`; `documents.yaml`'s schema doesn't need to change.
+
+**User** followed up: "so to handle other formats we need to change ingest only?" Corrected
+precisely rather than confirming loosely: no — a new reader module is also needed (e.g. a
+`csv_reader.py`; `docx_reader.py` only knows OOXML), and `chunk_document()`'s heading-detection
+heuristic (paragraph style + length guard) is meaningless for tabular rows, so a CSV's
+chunking strategy would need checking against real CSV content rather than assumed adequate
+by default. `ingest.py` changes only to dispatch to the right reader, not to do the reading
+itself.
+
+## 35. Brainstorming stronger, deterministic grounding checks
+
+**User** invoked `superpowers:brainstorming` directly, proposing three deterministic checks to
+add alongside the existing LLM-based `verify_answer` pass: citation must name a retrieved
+chunk, citation must name the document actually retrieved, and cited text must be present in
+the evidence. Classified Bounded (existing `verify_answer`/`format_answer` code, no new
+subsystem) and read `src/agent.py` + `src/verification.py` in full before proposing anything.
+
+Found the first two ideas were already partially implemented, but weaker than they sound: the
+existing check (`if not any(c.doc.display_name in draft for c in cited_chunks)`) scans the
+*whole draft* for any retrieved document's name, not the citation field specifically — so a
+coincidental mention elsewhere in `reason` could mask a citation naming the wrong document
+entirely. The third idea had no existing implementation and a real design risk: `reason` is
+explicitly required (by `SYSTEM_PROMPT`) to be paraphrased HR-voice prose, not a quote, so a
+literal substring match of `reason` against the excerpts would false-reject by design.
+
+Asked one clarifying question on scoping idea 3 before proposing a design: full substring
+match (rejected as conflicting with the paraphrase requirement), numeric-only grounding, or
+numeric + named-entity grounding. **User chose numeric + named-entity grounding** — which also
+directly hardens the still-open, prompt-only, unverified-at-scale fix from §20
+(`docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md`) with a real structural
+guarantee.
+
+Presented a short design: (1) scope the citation check to the parsed-out citation field only
+(via a regex anchor on `format_answer()`'s guaranteed `"— (...)"` trailing shape — parsing a
+format the codebase itself already enforces, not fragile free-text parsing), explicitly
+deferring section-level citation matching as too fragile given freeform compound citations;
+(2) numeric + named-entity grounding on the verdict+reason segment, flagged as the riskiest
+part (acronym/false-positive risk) and requiring the usual TDD + adversarial live-verification
+discipline before shipping.
+
+**User decision:** start with only the citation-scoping change (item 1) for now.
+
+## 36. Citation-scoping fix: TDD, live-verified, and a fresh backlog reproduction found along the way
+
+Implemented item 1 via TDD. Red test first: a draft with a document name mentioned in `reason`
+but a fabricated document in `citation` — confirmed it passed under the old whole-draft check
+(false negative demonstrated directly, not assumed). Added `_extract_citation()` (parses the
+trailing `"— (...)"` segment `format_answer()` guarantees, falling back to the whole draft if
+the marker's absent) and scoped the existing document-name check to that segment. 81/81
+offline tests green, including the new one.
+
+Live-verified with `python -m evals.eval` (API key supplied inline per this repo's standing
+constraint that a user's own `export` doesn't reach the session's separate shell): **7/8
+passed.** Confirmed via `git diff` that the one failure's cause — the LLM verifier's own
+rejection reasoning, not the new deterministic check's rejection message — was untouched by
+this change; it was instead a **fresh, unprompted live reproduction** of the still-open
+`docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md`, the
+first rejection since that ticket opened whose reasoning clearly exhibits the ticket's *core*
+mechanism (pattern-(a) carve-out reasoning over-generalized onto the APAC gym rate) rather than
+just the two side-mechanisms the 2026-08-23 investigation (§30) had turned up instead. Logged
+this as a new "Fresh reproduction (2026-08-24)" section in that ticket, updated its Status line
+accordingly, and left the ticket's "hold, don't fix" decision unchanged — a single occurrence
+still isn't a before/after baseline, per that ticket's own stated bar.
+
+Committed the citation-scoping change once the user configured git's local identity (the
+commit had failed earlier in the session with "Author identity unknown").

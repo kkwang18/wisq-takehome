@@ -243,6 +243,41 @@ take-home's 8 example queries correctly — including two with no clean numeric 
   ready fix. **User decision: hold — no code change for this ticket**, document the findings
   instead. Updated the ticket, `CLAUDE.md`, and `DESIGN.md` accordingly.
 
+## 13. Docs polish, an architecture Q&A, and a scoped-down grounding fix (§31–36)
+
+- **§31 — A live timing breakdown, then three exploratory architecture questions.** One
+  instrumented live query gave real per-step numbers, including the ~4.7s one-time library
+  import cost. Three follow-up questions answered conversationally, no code changes: a
+  long-lived process would eliminate that import gap (it's one-time, not per-question); a
+  single-Claude-call version would save a round-trip but give up the independent-verification
+  principle that's caught real fabrications before (recommended against); per-employee privacy
+  isolation would be a genuinely architectural change, sketched but not built.
+- **§32–33 — `DESIGN.md` condensed twice for an external reader.** First pass: every "Core
+  components" subsection condensed to a strict Choice/Why/Tradeoff structure (480→398 lines),
+  "Life of a query" kept byte-identical. Second pass: the title/intro/"System summary" split
+  merged into one opening section, plus a new "Contents" table of contents. Republished as the
+  same artifact both times; the user's own later manual wording edit to the intro was left as
+  a deliberate style choice, not reverted.
+- **§34 — Is the system overfit to `.docx`?** Read the actual ingestion/chunking code before
+  answering: `ingest.py` hardcodes a `.docx`-specific reader with no format dispatch, but
+  chunking/retrieval/agent/verification are already format-agnostic (they only see plain
+  `Paragraph`/`Chunk` dataclasses). Recommended against building a speculative dispatch layer
+  now (YAGNI). A precise follow-up question ("so only `ingest.py` changes?") got a precise
+  correction: a new format-specific reader module is also needed, plus a check that CSV's
+  row-shaped data actually fits the paragraph-heading chunking model before assuming so.
+- **§35–36 — Brainstorming stronger grounding checks, then shipping the scoped-down first
+  piece.** The user proposed three deterministic checks to add alongside the LLM-based
+  `verify_answer` pass. Found the existing citation check was weaker than it looked (scanned
+  the whole draft, not just the citation field) and flagged that literal-text matching for the
+  third idea would conflict with `SYSTEM_PROMPT`'s required paraphrased-prose style — narrowed
+  via one clarifying question to numeric + named-entity grounding, which would also harden the
+  still-open, prompt-only fix from §20. **User scoped the first round to citation-tightening
+  only.** Shipped via TDD (a red test proving the old check's false-negative, not assumed);
+  live verification (`evals.eval`, 7/8) surfaced a genuine, unprompted fresh reproduction of
+  the open carve-out-overgeneralization ticket (§30) — confirmed via `git diff` as unrelated to
+  this change, logged as new evidence on that ticket rather than acted on, per that ticket's
+  standing "hold" decision. Committed once git identity was configured.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

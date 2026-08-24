@@ -13,6 +13,19 @@ class VerifiedAnswer:
     rejected_draft: str | None = None
 
 
+def _extract_citation(draft: str) -> str:
+    """Pull the citation field back out of a format_answer()-shaped draft. format_answer()
+    guarantees the citation is always the trailing "— (...)" segment, so this parses a shape
+    the codebase itself already enforces, not arbitrary free text. Falls back to scanning the
+    whole draft if the marker is missing (e.g. a malformed or hand-built draft in a test),
+    preserving the old, looser behavior rather than crashing on unexpected input."""
+    marker = "— ("
+    idx = draft.rfind(marker)
+    if idx == -1:
+        return draft
+    return draft[idx + len(marker):]
+
+
 def build_verification_prompt(draft: str, cited_chunks: list[Chunk]) -> str:
     excerpts = "\n\n".join(f"[{c.doc.display_name} - {c.section_title}]\n{c.text}" for c in cited_chunks)
     return (
@@ -64,7 +77,8 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
             grounded=False,
         )
 
-    if not any(c.doc.display_name in draft for c in cited_chunks):
+    citation_text = _extract_citation(draft)
+    if not any(c.doc.display_name in citation_text for c in cited_chunks):
         return VerifiedAnswer(
             text="The answer's citation doesn't name any of the retrieved excerpts, so this "
             "cannot be confirmed as grounded.",

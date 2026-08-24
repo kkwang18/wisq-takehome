@@ -3,10 +3,15 @@
 **Status:** Open, not fixed — deliberately held. Root cause now confirmed *analytically*
 (2026-08-23 investigation, see "Root cause investigation" near the bottom): the original two
 captured rejections are a genuine instance of over-broad application of pattern (a), not a
-distinct mechanism. But 44 live reps across two reproduction methodologies did not re-trigger
-that specific pattern, so no clean before/after baseline exists to adversarially test a fix
-against — the same rigor the two related tickets' fixes were held to before shipping. User
-decision: hold off on any `build_verification_prompt`/`verify_answer` code change for this
+distinct mechanism. The 2026-08-23 investigation's 44 reps across two reproduction
+methodologies did not re-trigger that specific pattern, but a **fresh, cleaner reproduction
+landed 2026-08-24** (unprompted, during live verification of an unrelated `verify_answer`
+change — see "Fresh reproduction (2026-08-24)" below) — the first live rejection whose
+reasoning cites the core pattern-(a)-over-generalization mechanism this ticket describes,
+not just the two side mechanisms the 2026-08-23 reps turned up instead. Still no controlled
+before/after baseline (one rejection, not a rep series), so the "hold off on a code change"
+decision below is unchanged — but this is meaningfully closer to a usable trigger than before.
+User decision: hold off on any `build_verification_prompt`/`verify_answer` code change for this
 ticket until reproduction is easier, rather than ship a fix untested against a real baseline.
 Severity and false-rejection framing below are unchanged from the original triage.
 
@@ -160,6 +165,45 @@ baseline to test it against** — do not touch `build_verification_prompt` or an
 `verify_answer` code for this ticket until reproduction is easier. Severity stays Medium,
 false-rejection direction, per the original triage above — this investigation didn't change
 that assessment, only the confidence in the root cause and the difficulty of re-triggering it.
+
+## Fresh reproduction (2026-08-24)
+
+Surfaced unprompted while live-verifying an unrelated, narrowly-scoped fix: tightening
+`verify_answer`'s citation check to scan only the parsed-out citation field instead of the
+whole draft (see `docs/TRANSCRIPT.md` for that change). `git diff` confirmed that fix touched
+only the new `_extract_citation()` helper and the citation-check line — `build_verification_prompt`
+was untouched — so this is not a symptom of that change; it's the same pre-existing verifier
+behavior this ticket already tracks, caught by chance during an 8-query `evals.eval` run.
+
+`python -m evals.eval`, query "What is the gym related benefits for a employee living in
+Asia?", rejected UNSUPPORTED:
+
+> "The draft claims that for China/Japan/Taiwan, since the APAC handbook's precedence rule
+> only claims priority for PTO (not gym benefits), the global handbook's 'more-generous-wins'
+> rule (Section 8) would apply to gym reimbursement, implying the higher $50 global benefit
+> could win over the $30 regional one. However, the excerpts explicitly state 'For all other
+> benefits, refer to the precedence rules in the global Acme Employee Handbook' — and Section 8
+> (more-generous-wins) appears only in the 2025 handbook, not the 2026 handbook cited in the
+> draft's citation. Also, the specific $30 regional gym benefit for these three countries is
+> stated as a specific carve-out ('Eligible employees in China, Japan, and Taiwan are
+> reimbursed... up to $30'), which under the specific-carve-out reasoning pattern would be the
+> complete and final answer for those employees, rather than being subject to override by the
+> general more-generous rule. The draft's conclusion that the $50 global rate might apply in
+> these three countries via the general precedence rule is not clearly supported and conflicts
+> with the specific carve-out for those three named jurisdictions."
+
+This rejection actually bundles **two** mechanisms in one reasoning block: a citation-year
+attribution complaint ("Section 8... appears only in the 2025 handbook, not the 2026 handbook
+cited") matching the *first* side-mechanism the 2026-08-23 end-to-end reps turned up, **and**
+the core ticketed mechanism — treating the APAC-specific $30 gym figure as if it were a
+PTO-style carve-out, directly contradicting the same excerpt's "for all other benefits, refer
+to global" routing. The 2026-08-23 investigation's 44 reps found the two side-mechanisms
+(citation-year slip; draft-side gym-as-carve-out mischaracterization) but zero clean instances
+of this core mechanism — this is the first live rejection since the ticket opened whose
+reasoning clearly exhibits it. Still a single occurrence, not a rep series, so it doesn't by
+itself supply the before/after baseline the "Test plan" below calls for — but it's the
+strongest lead yet toward a reliable trigger, and worth trying to reproduce again first if this
+ticket is picked back up.
 
 ## Suggested fix (sketch, still not implemented — deliberately held, see investigation above)
 
