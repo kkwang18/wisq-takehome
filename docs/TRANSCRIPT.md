@@ -1815,3 +1815,66 @@ size could be adjusted for readability — explained that Markdown-published art
 through a fixed host template with no CSS hook from the file's content, offered an HTML-artifact
 conversion as the real fix, and the user declined, choosing to keep the simpler Markdown
 publish-and-edit-directly workflow over styling control.
+
+## 40. Final cleanup: parallel code + doc review, findings fixed with live verification
+
+**User** asked for a final cleanup and review of everything, plus confirmation that
+`TRANSCRIPT.md` was current. Dispatched two fresh-eyes reviews in parallel rather than
+reviewing inline: a whole-tree code review (opus, `src/`/`evals/`/`tests/` read in full, no
+diff — this codebase had only ever been reviewed incrementally, one change at a time, never
+holistically together) and a documentation consistency review (sonnet, `CLAUDE.md`/
+`DESIGN.md`/`README.md`/`HISTORY.md`/`docs/backlog/*` checked against the actual repo state,
+not just against each other). Handled the "is `TRANSCRIPT.md` current" question directly:
+wrote §38-39 for the two sessions since the last entry (the `rejected_draft` removal, the
+`DESIGN.md` restructure) before the reviews even came back.
+
+**Doc review**: 2 Critical, 2 Important, 1 Minor. Both Criticals were the same root cause —
+`CLAUDE.md` pointed at two `DESIGN.md` section names ("Path to scale," "Known limitations")
+that no longer existed after §39's restructure renamed them ("What happens when it scales?",
+"Known failure modes"). One finding (HISTORY.md missing §38-39) turned out to be a timing
+race — already fixed by the update made minutes earlier — confirmed against the live file
+before treating it as real. Fixed the other four directly: the stale section names, a
+`verify_answer` line-number citation that had drifted (60→73, the same failure mode this
+project has now hit three separate times after doc restructures), and `README.md`'s stale
+"36-case" `edge_cases` count plus an incomplete category list.
+
+**Code review**: 0 Critical, 5 Important, several Minor — the most substantive finding of the
+whole pass. `evals/matching.py`'s `Expectation.required` field was the one assertion-shaped
+check not gated on `grounded=True` (every sibling field — `numeric`/`unknown`/`hedge`/
+`doc_type`/`version_year` — already was, from the final-review fix wave two sessions ago that
+added the others but missed this one). The reviewer demonstrated it live: a rejected answer
+satisfied `evals/edge_cases.py`'s `ENTITY_HALLUCINATION_GUARD` case 2, since `verify_answer`'s
+fallback text echoes the verifier's raw rejection reason verbatim and that reason happened to
+mention the required terms. Fixed via TDD (red test reproducing the exact exploit first,
+confirmed failing, then fixed), and added one sentence to `_check_expectation()`'s docstring
+stating the grounded-gating rule explicitly, so the next field doesn't repeat this — the
+reviewer's own recommendation, treating the missing invariant statement as the actual root
+cause, not just this one field's bug.
+
+Two more real, live-prompt-facing findings: `src/verification.py`'s verifier prompt said "note
+two specific reasoning patterns" while listing three — pattern (c), closed-list exclusion, was
+added later (§28) and the lead-in was never updated, meaning the model was told to expect two
+items before being handed three, which is exactly the shape of mismatch that could make it
+under-credit the third. And `evals/edge_cases.py`'s "Republic of China" case had been carrying
+a deliberately-stale `"12"` expectation since §21 (documented in place, correctly explaining
+why a hedge is now the right answer) — correct as an explanation, but it meant
+`python -m evals.edge_cases` could never exit 0. Converted the expectation to
+`Expectation(hedge=True)`, kept the comment.
+
+Both changes touch live LLM-facing behavior, so live-verified per this project's standing
+rule rather than trusting the offline suite alone: `evals.eval` 8/8, `evals.edge_cases` 34/38,
+with the Republic-of-China case and the entity-hallucination-guard exploit-case both confirmed
+passing live, not just offline. The 4 remaining live failures were individually diagnosed as
+pre-existing, already-documented classes (marker-phrasing gaps, one fresh instance of the
+already-known `verify_answer` intermittency) — none newly introduced by these fixes.
+
+Fixed a handful of cheap Minor findings alongside (typed `matches()`/`explain()`'s `expected`
+parameter, a redundant duplicate index build, temp test files moved into `tmp_path`, one new
+offline test closing real coverage gap on `answer_question`'s untested `max_tokens` fail-closed
+path — 111→114 offline tests). Two findings deliberately deferred rather than fixed inline:
+asked the user directly whether the verifier's raw rejection reasoning should stop leaking into
+the employee-facing fallback message — **user decision: leave it, intentional for this
+take-home, useful for debugging** — and appended the `cited_chunks` unbounded-duplicate-
+accumulation finding to the existing `2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`
+ticket rather than a rushed fix, since the reviewer tied it to the same root semantic question
+that ticket already covers.

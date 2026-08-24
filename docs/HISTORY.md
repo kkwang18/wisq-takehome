@@ -321,6 +321,22 @@ take-home's 8 example queries correctly — including two with no clean numeric 
   clustering on the same already-open carve-out ticket). User's own manual edits afterward
   orphaned a Contents anchor; flagged rather than silently fixed, then removed on confirmation.
 
+## 16. Final cleanup: parallel code + doc review (§40)
+
+- **§40 — Two fresh-eyes reviews dispatched in parallel, findings fixed with live
+  verification.** First whole-tree code review this codebase has had (every prior review was
+  scoped to one change). Doc review found `CLAUDE.md` pointing at two `DESIGN.md` section
+  names that no longer existed after §39's restructure. Code review's headline finding:
+  `Expectation.required` was the one assertion-shaped eval-matcher field not gated on
+  `grounded=True` — a rejected answer could satisfy it via the verifier's echoed rejection
+  text, demonstrated live against a real eval case, fixed via TDD. Also found and fixed a
+  live verifier-prompt bug (said "two" patterns, listed three) and a permanently-failing eval
+  case (a deliberately-stale expectation that made the suite unable to ever exit 0). Both
+  live-prompt changes live-verified, not just offline-tested. One product-decision finding
+  (the verifier's raw reasoning leaking into the user-facing rejection message) was asked
+  about directly rather than silently fixed — user kept it as-is, intentional for
+  debuggability in this take-home. 111→114 offline tests.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →
