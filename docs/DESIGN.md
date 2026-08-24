@@ -1,17 +1,10 @@
 # Wisq: RAG Q&A System Design
-
-Wisq answers employee questions about Acme's HR benefits by retrieving relevant excerpts from
-three handbook `.docx` files and having Claude answer strictly from what was retrieved,
-grounded and version/jurisdiction-aware — not from prior knowledge and not from a document
-pasted wholesale into the prompt. This document covers what the system does, the guarantees it
-holds, its architecture, why the major decisions were made, how it fails, what changes at
-scale, and how correctness is measured.
+Answers employee questions about Acme's HR benefits: every claim must be grounded in retrieved evidence, not prior knowledge, and answers stay version- and jurisdiction-aware. It's a CLI that retrieves from three handbook .docx files instead of stuffing full documents into the prompt, every claim traced back to a chunk actually returned by a search call. Three things make this corpus harder than generic RAG: two nearly-identical global handbook versions (2025 vs. 2026) that differ only in a few numbers, a regional handbook that overrides the global one for exactly one benefit type (PTO) and defers to it for everything else, and jurisdiction names in questions ("Asia") that are broader than what the regional handbook actually covers (China, Japan, Taiwan).
 
 ## Contents
 
 - [System Goals & Invariants](#system-goals--invariants)
 - [Non-goals](#non-goals)
-- [What does the system do?](#what-does-the-system-do)
 - [Architecture](#architecture)
 - [Why the major decisions were made](#why-the-major-decisions-were-made)
 - [Known failure modes](#known-failure-modes)
@@ -41,18 +34,6 @@ stated as intent — but the enforcement is layered defense, not a formal proof;
 - Does not currently support arbitrary document uploads at runtime.
 - Does not guarantee zero hallucinations; it uses layered grounding checks and fails closed
   when evidence cannot be verified.
-
-## What does the system do?
-
-A CLI that answers employee questions against three Acme HR handbook `.docx` files using
-retrieval-augmented generation instead of stuffing full documents into the prompt: every claim
-must trace back to a chunk actually returned by a search call.
-
-Three things make this corpus harder than generic RAG, and shape most of the design below: two
-nearly-identical global handbook versions (2025 vs. 2026) that differ only in a few numbers; a
-regional handbook that overrides the global one for exactly one benefit type (PTO) and defers
-to it for everything else; and jurisdiction names in questions ("Asia") that are broader than
-what the regional handbook actually covers (China, Japan, Taiwan).
 
 ## Architecture
 
@@ -266,46 +247,38 @@ service, not by how long each has been on the backlog.
    sequences, `verify_answer` accept/reject rates, or latency/cost per question. The single
    biggest gap between "works when I run it live and read the output" and "operable as a
    service." Trigger: before onboarding any real user traffic.
-2. **Eval harness rigor** — largely addressed (a deterministic `Expectation` type replaced most
-   of the keyword-matching risk); one precision gap remains, documented above and in
-   `docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`.
-3. **Vector DB migration** — designed and prototype-verified against the real corpus, found no
+2. **Vector DB migration** — designed and prototype-verified against the real corpus, found no
    accuracy or performance win at the current ~73-chunk size. Trigger: corpus size, not
    calendar time. `docs/backlog/2026-08-20-vector-db-migration-for-scale.md`.
-4. **LLM-assisted (semantic) chunking** — two prototypes confirmed real differentiating value,
+3. **LLM-assisted (semantic) chunking** — two prototypes confirmed real differentiating value,
    but neither was needed to fix any gap found in this specific 3-document corpus. Trigger: a
    new document whose structure the current paragraph/heading rules can't safely assume.
    `docs/backlog/2026-08-20-llm-assisted-semantic-chunking.md`.
-5. **Cost & latency at volume** — two full Claude round-trips per question is a deliberate
+4. **Cost & latency at volume** — two full Claude round-trips per question is a deliberate
    grounding tradeoff, acceptable at take-home volume. Prompt caching was investigated and
    shelved (97% of per-question time is Claude generation, not input reprocessing — caching
    saves cost, not the latency that motivated the question).
-6. **Service-ification and concurrency** — `main.py` is a synchronous CLI, one process per
+5. **Service-ification and concurrency** — `main.py` is a synchronous CLI, one process per
    question. A real service needs a long-lived process serving concurrent requests against one
    loaded index, and request-level timeout/retry/backoff, which doesn't exist today — an API
    error or rate limit currently just propagates as an exception.
-7. **Document lifecycle at scale** — `documents.yaml` is hand-edited today. Growing to many
+6. **Document lifecycle at scale** — `documents.yaml` is hand-edited today. Growing to many
    more handbooks needs validation that a new manifest entry doesn't silently conflict with an
    existing one, and a decision on whether re-ingestion should trigger from a document-upload
    flow rather than a manual CLI run.
 
 ## How do we know it's correct?
 
-Two different kinds of check, kept separate. `tests/` is offline, zero API calls, real local
-embeddings — the regression guard for chunking/retrieval/matching changes (111 tests).
-`evals/` is live-API: `eval.py` runs the 8 take-home queries on every meaningful change;
-`edge_cases.py` is a 38-case production-readiness suite (entity resolution, negative space,
-grounding, consistency, precedence generalization, entity-hallucination guard) run on demand
-given its real API cost. Offline tests catch retrieval/logic regressions instantly; only a
-live run catches LLM sampling-variance bugs — this codebase has repeatedly found real bugs
-(verdict ordering, verifier false-rejections, formatting inconsistency) that only live reruns
-surfaced. Treat a green eval run as a smoke test, not a strict regression gate — `matches()`'s
-word markers remain gameable by phrasing (see "Known failure modes").
+Two kinds of check, kept separate. tests/ is offline, zero API calls, real local 
+embeddings: the regression guard for chunking/retrieval/matching (111 tests). 
+`evals/` is live-API: `eval.py` runs the 8 take-home queries on every meaningful change; 
+`edge_cases.py` is a 38-case production-readiness suite (entity resolution, negative space, grounding, consistency, precedence generalization, entity-hallucination guard), 
+run on demand given its API cost. Offline tests catch logic regressions instantly; only a live run catches sampling-variance bugs, 
+and live reruns have repeatedly surfaced real ones (verdict ordering, verifier false-rejections, formatting). 
+A green eval run is a smoke test, not a regression gate: matches()'s word markers stay gameable by phrasing (see "Known failure modes").
 
-Because grounding is enforced by a second LLM pass, not a deterministic proof, correctness is
-a measured property, not a guarantee. Below are real numbers from this system, not targets —
-this project has no committed SLOs yet (see "Observability" above), just the best current
-measurement of each metric.
+Grounding is enforced by a second LLM pass, not a deterministic proof, so correctness is measured, not guaranteed. 
+The numbers below are real measurements, not SLO targets: this project has no committed SLOs yet (see "Observability").
 
 | Metric | Measured value | Method / sample |
 |---|---|---|
