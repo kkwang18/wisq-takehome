@@ -5,7 +5,7 @@ import sys
 
 from ingest import build_index
 from src.agent import answer_question
-from evals.matching import explain, matches
+from evals.matching import Expectation, explain, matches
 
 # Entity resolution: one representative case per distinct lexical/semantic mechanism, not
 # per jurisdiction — typo/casing/abbreviation exercise the same retrieval code path
@@ -64,23 +64,36 @@ CONSISTENCY = [
 # benefit-type/year combination this corpus supports — proving the logic isn't
 # Taiwan-specific is this category's entire point, so it does NOT collapse to one
 # representative. Also re-exercises the version_year retrieval fix (commit b7411e4) across
-# China/Japan, not just Taiwan.
+# China/Japan, not just Taiwan. Each case now also asserts *which* document/version actually
+# governed the answer (Expectation.doc_type/.version_year against real cited_chunks), not just
+# the resulting figure — catching a case that gets the right number for the wrong reason.
 PRECEDENCE = [
-    ("What is the PTO for an employee based in China in 2025?", "12"),
-    ("What is the PTO for an employee based in China in 2026?", "12"),
-    ("What is the PTO for an employee based in China?", "12"),
-    ("What is the PTO for an employee based in Japan in 2025?", "12"),
-    ("What is the PTO for an employee based in Japan in 2026?", "12"),
-    ("What is the PTO for an employee based in Japan?", "12"),
-    ("What is the PTO for an employee based in Taiwan in 2025?", "12"),
-    ("What is the PTO for an employee based in Taiwan in 2026?", "12"),
-    ("What is the PTO for an employee based in Taiwan?", "12"),
-    ("What is the gym benefit for an employee based in China?", "50"),
-    ("What is the gym benefit for an employee based in Japan?", "50"),
-    ("What is the gym benefit for an employee based in Taiwan?", "50"),
-    ("What is the annual conference and training budget for an employee based in China?", "1,000"),
-    ("What is the annual conference and training budget for an employee based in Japan?", "1,000"),
-    ("What is the annual conference and training budget for an employee based in Taiwan?", "1,000"),
+    ("What is the PTO for an employee based in China in 2025?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in China in 2026?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in China?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in Japan in 2025?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in Japan in 2026?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in Japan?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in Taiwan in 2025?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in Taiwan in 2026?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the PTO for an employee based in Taiwan?", Expectation(numeric="12", doc_type="regional_handbook")),
+    ("What is the gym benefit for an employee based in China?", Expectation(numeric="50", doc_type="global_handbook", version_year=2026)),
+    ("What is the gym benefit for an employee based in Japan?", Expectation(numeric="50", doc_type="global_handbook", version_year=2026)),
+    ("What is the gym benefit for an employee based in Taiwan?", Expectation(numeric="50", doc_type="global_handbook", version_year=2026)),
+    ("What is the annual conference and training budget for an employee based in China?", Expectation(numeric="1,000", doc_type="global_handbook", version_year=2026)),
+    ("What is the annual conference and training budget for an employee based in Japan?", Expectation(numeric="1,000", doc_type="global_handbook", version_year=2026)),
+    ("What is the annual conference and training budget for an employee based in Taiwan?", Expectation(numeric="1,000", doc_type="global_handbook", version_year=2026)),
+]
+
+# Entity hallucination guard: correct answers about APAC-jurisdiction questions must never
+# invent named jurisdictions the corpus doesn't cover. docs/backlog/2026-08-20-draft-time-
+# named-entity-hallucination.md: a draft once fabricated "Hong Kong/Singapore" as APAC-covered
+# countries, neither of which appears anywhere in the corpus — verify_answer caught it that
+# time, but the fix (a SYSTEM_PROMPT restriction) has only 7 live reproductions behind it.
+# These cases give that fix ongoing, structural regression coverage.
+ENTITY_HALLUCINATION_GUARD = [
+    ("What is the PTO allowance for an employee living in Asia?", Expectation(hedge=True, forbidden=["Hong Kong", "Singapore"])),
+    ("What countries does the APAC regional handbook cover?", Expectation(required=["China", "Japan", "Taiwan"], forbidden=["Hong Kong", "Singapore"])),
 ]
 
 CATEGORIES = {
@@ -89,6 +102,7 @@ CATEGORIES = {
     "grounding": GROUNDING,
     "consistency": CONSISTENCY,
     "precedence": PRECEDENCE,
+    "entity_hallucination_guard": ENTITY_HALLUCINATION_GUARD,
 }
 
 
