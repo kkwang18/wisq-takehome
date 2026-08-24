@@ -145,7 +145,7 @@ def _matches_expectation(expectation: Expectation, result: VerifiedAnswer) -> bo
         if not any(c.doc.version_year == expectation.version_year for c in result.cited_chunks):
             return False
     if expectation.required:
-        if not all(_numeric_boundary_matches(term, result.text) for term in expectation.required):
+        if not all(_term_boundary_matches(term, result.text) for term in expectation.required):
             return False
     if expectation.forbidden and result.grounded:
         if any(term in result.text for term in expectation.forbidden):
@@ -159,6 +159,16 @@ def _numeric_boundary_matches(marker: str, text: str) -> bool:
     isn't actually part of (e.g. "50" inside "$500", "1,000" inside "$21,000",
     "14" inside "2014") — confirmed live as a real false-positive risk, not theoretical."""
     pattern = r"(?<![0-9,])" + re.escape(marker) + r"(?![0-9,])"
+    return re.search(pattern, text) is not None
+
+
+def _term_boundary_matches(term: str, text: str) -> bool:
+    """Word-boundary-aware substring match for Expectation.required — unlike
+    _numeric_boundary_matches (which also excludes an adjacent comma, to protect numeric
+    markers from matching inside a larger comma-grouped number), this allows ordinary
+    punctuation like a trailing comma in prose (e.g. a term in a comma-separated list: "China,
+    Japan, and Taiwan"), while still not matching a term embedded inside a larger word."""
+    pattern = r"\b" + re.escape(term) + r"\b"
     return re.search(pattern, text) is not None
 
 
@@ -206,7 +216,7 @@ def explain(expected, result: VerifiedAnswer) -> str:
         cited = {c.doc.version_year for c in result.cited_chunks}
         reasons.append(f"version_year: expected {expected.version_year!r}, cited {cited or 'nothing'}")
     if expected.required:
-        missing = [t for t in expected.required if not _numeric_boundary_matches(t, result.text)]
+        missing = [t for t in expected.required if not _term_boundary_matches(t, result.text)]
         if missing:
             reasons.append(f"required: missing {missing}")
     if expected.forbidden and result.grounded:

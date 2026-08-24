@@ -270,3 +270,20 @@ def test_explain_reports_doc_type_mismatch():
     msg = explain(Expectation(doc_type="regional_handbook"), result)
     assert "doc_type" in msg
     assert "regional_handbook" in msg
+
+
+def test_expectation_required_matches_a_term_immediately_followed_by_a_comma():
+    # Real live failure: _numeric_boundary_matches's comma-exclusion (designed to protect
+    # numeric markers from matching inside a larger comma-grouped number, e.g. "1" inside
+    # "1,234") also blocked an ordinary word immediately followed by a comma in prose —
+    # "China" in "...Republic of China, Japan, and Taiwan." See docs/superpowers/plans/
+    # 2026-08-24-eval-matcher-redesign.md's SDD ledger, Task 9 findings, for the full
+    # root-cause account.
+    text = "The People's Republic of China, Japan, and Taiwan."
+    result = _result(text)
+    assert matches(Expectation(required=["China", "Japan", "Taiwan"]), result)
+
+
+def test_expectation_required_does_not_match_a_term_embedded_in_a_larger_word():
+    result = _result("The Chinatown district has its own local rules.")
+    assert not matches(Expectation(required=["China"]), result)
