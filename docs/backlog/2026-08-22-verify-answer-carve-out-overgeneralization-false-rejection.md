@@ -4,13 +4,13 @@
 (2026-08-23 investigation, see "Root cause investigation" near the bottom): the original two
 captured rejections are a genuine instance of over-broad application of pattern (a), not a
 distinct mechanism. The 2026-08-23 investigation's 44 reps across two reproduction
-methodologies did not re-trigger that specific pattern, but a **fresh, cleaner reproduction
-landed 2026-08-24** (unprompted, during live verification of an unrelated `verify_answer`
-change — see "Fresh reproduction (2026-08-24)" below) — the first live rejection whose
-reasoning cites the core pattern-(a)-over-generalization mechanism this ticket describes,
-not just the two side mechanisms the 2026-08-23 reps turned up instead. Still no controlled
-before/after baseline (one rejection, not a rep series), so the "hold off on a code change"
-decision below is unchanged — but this is meaningfully closer to a usable trigger than before.
+methodologies did not re-trigger that specific pattern, but **two independent, unprompted
+reproductions landed on 2026-08-24** (during live verification of two unrelated changes — see
+"Fresh reproduction (2026-08-24)" and "Second occurrence, same day" below), the second a
+clean, single-mechanism instance. Still no controlled before/after baseline (isolated
+rejections, not a rep series), so the "hold off on a code change" decision below is
+unchanged — but two same-day reproductions is the strongest signal yet that this is more
+reproducible than the 2026-08-23 investigation's 44-rep attempt suggested.
 User decision: hold off on any `build_verification_prompt`/`verify_answer` code change for this
 ticket until reproduction is easier, rather than ship a fix untested against a real baseline.
 Severity and false-rejection framing below are unchanged from the original triage.
@@ -204,6 +204,38 @@ reasoning clearly exhibits it. Still a single occurrence, not a rep series, so i
 itself supply the before/after baseline the "Test plan" below calls for — but it's the
 strongest lead yet toward a reliable trigger, and worth trying to reproduce again first if this
 ticket is picked back up.
+
+### Second occurrence, same day — a cleaner single-mechanism reproduction
+
+Surfaced unprompted a second time on 2026-08-24, during live verification of an unrelated
+eval-matcher redesign (`docs/superpowers/plans/2026-08-24-eval-matcher-redesign.md` — the
+`evals/matching.py` structured-`Expectation` work, not `verify_answer` or
+`build_verification_prompt`). `python -m evals.edge_cases`, `precedence` category, query "What
+is the gym benefit for an employee based in Japan?", rejected UNSUPPORTED:
+
+> "The draft assumes the global handbook's 'more generous wins' conflicts clause applies to
+> the APAC-specific gym benefit, but the APAC Benefits Handbook is a specific carve-out that
+> applies specifically to employees in China, Japan, and Taiwan, providing a specific
+> $30/month gym benefit for that population. The excerpts do not show that the global
+> handbook's conflicts section overrides this specific regional provision — in fact the APAC
+> handbook's own Conflicts and Precedence section is redacted/empty in the excerpts, and
+> there's no excerpt establishing that the global 'more generous' rule takes precedence over
+> the APAC-specific benefit amount. Asserting that the $50 global rate applies (rather than
+> the $30 regional rate) for APAC employees is not directly supported by the excerpts and
+> contradicts the specific carve-out reasoning pattern, which would instead suggest the $30
+> APAC-specific rule is the complete and final answer for APAC employees."
+
+Unlike the first 2026-08-24 reproduction (which bundled a citation-year attribution complaint
+together with the core mechanism), this rejection is a **clean, single-mechanism instance** of
+exactly the pattern this ticket describes — no citation-year confusion, just the
+pattern-(a)-over-generalization reasoning on its own. Two independent live reproductions of
+the core mechanism on the same day, from two unrelated verification runs, is the strongest
+signal yet that this is more reproducible than the 2026-08-23 investigation's 44-rep attempt
+suggested — though still not a controlled rep series, so the "hold off on a code change"
+decision remains unchanged. Worth trying a fresh, larger-scale reproduction attempt
+specifically targeting "gym benefit for [China/Japan] employee" (not just the Asia-hedge
+query the original ticket and first reproduction both used) the next time this ticket is
+picked up.
 
 ## Suggested fix (sketch, still not implemented — deliberately held, see investigation above)
 
