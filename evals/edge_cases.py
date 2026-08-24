@@ -14,16 +14,17 @@ ENTITY_RESOLUTION = [
     ("what is the pto for an employee based in taiwan", "12"),
     ("What is the PTO for an employee based in Tiawan?", "12"),
     ("What is the gym benefit for an employee in the PRC?", "50"),
-    # This expectation is stale as of the entity-hallucination restriction added later
+    # Expected value corrected from "12" (final review, 2026-08-24) — that literal marker was
+    # stale as of the entity-hallucination restriction added earlier
     # (docs/backlog/2026-08-20-draft-time-named-entity-hallucination.md): "Republic of China"
     # is Taiwan's official name, never written verbatim in the corpus (which only ever says
     # "People's Republic of China," a different country) — resolving it to "12" would require
     # outside geopolitical knowledge the system prompt now explicitly forbids for named
     # entities. A live run correctly hedges instead ("ambiguous... need to know which
     # jurisdiction you mean") rather than guessing. Don't "fix" this by loosening that
-    # restriction; the hedge is the safer, now-intended behavior. Left as-is rather than
-    # rewritten, so this note stays attached to the case it explains.
-    ("What is the PTO for an employee based in the Republic of China?", "12"),
+    # restriction; the hedge is the safer, correct behavior — this case now asserts that
+    # directly instead of asserting the stale "12" and leaving the suite permanently red.
+    ("What is the PTO for an employee based in the Republic of China?", Expectation(hedge=True)),
     ("What is the PTO for a Chinese national who works remotely from California?", "15"),
     ("What is the PTO for a contractor based in Taiwan?", "15"),
     ("What is the PTO for an employee who splits time between Japan and the United States?", "hedge"),

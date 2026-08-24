@@ -50,7 +50,7 @@ these true — they're the actual correctness contract, not stylistic defaults:
 - **Don't propose a vector DB, LLM-assisted chunking, or other scale-motivated infra change
   without reading `docs/backlog/` first.** Both are already fully designed and prototype-
   verified against the real corpus to bring no current benefit — deliberately deferred, not
-  overlooked. See `docs/DESIGN.md`'s "Path to scale" for trigger conditions.
+  overlooked. See `docs/DESIGN.md`'s "What happens when it scales?" for trigger conditions.
 - Keep `CLAUDE.md` / `TRANSCRIPT.md` / `HISTORY.md` updated incrementally as work happens, not
   batched at the end.
 - Only commit, push, or open a PR when explicitly asked.
@@ -113,4 +113,4 @@ controlled before/after baseline), `2026-08-24-eval-matcher-cited-chunks-weak-do
 — `cited_chunks` holds everything retrieved in a conversation, not just what was cited),
 `2026-08-24-eval-matcher-required-numeric-term-boundary-gap.md` (a narrow, currently-unused
 edge case in `required`'s boundary matching). Remaining gaps in `docs/DESIGN.md`'s "Known
-limitations."
+failure modes."

@@ -98,7 +98,7 @@ Taiwanese employee?"` end to end:
    of writing free text. `format_answer()` (`src/agent.py:183`) deterministically assembles
    them into `"{verdict}\n\n{reason}\n\n— ({citation})"`.
 6. `answer_question` calls `verify_answer(draft, cited_chunks, verify_llm_call)`
-   (`src/verification.py:60`). If `cited_chunks` is empty, this hard-fails immediately with no
+   (`src/verification.py:73`). If `cited_chunks` is empty, this hard-fails immediately with no
    LLM call. Otherwise it asks Claude — via a second tool call,
    `report_verification` — whether every claim in the draft is backed by the cited excerpts.
 7. If `SUPPORTED`, the draft is returned as-is. If not, a fallback "can't confirm this"

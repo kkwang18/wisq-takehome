@@ -230,6 +230,19 @@ def test_expectation_required_does_not_match_inside_a_larger_number():
     assert not matches(Expectation(required=["50"]), _result("The gym reimbursement is $500 per month."))
 
 
+def test_expectation_required_does_not_match_an_ungrounded_rejection():
+    # Real bug found in final review: verify_answer's fallback text echoes the verifier's raw
+    # rejection reason verbatim, so a rejected answer whose reason happens to mention the
+    # required terms must not satisfy the expectation — same grounded-gating every other
+    # assertion-shaped field (numeric/unknown/hedge/doc_type/version_year) already has.
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: the draft mentions China, Japan, and Taiwan but the excerpts "
+        "don't support that conclusion."
+    )
+    assert not matches(Expectation(required=["China", "Japan", "Taiwan"]), _result(rejection_text, grounded=False))
+
+
 def test_expectation_forbidden_fails_when_term_present():
     text = "The APAC handbook covers China, Japan, Taiwan, and Singapore."
     assert not matches(Expectation(forbidden=["Singapore"]), _result(text))

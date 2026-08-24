@@ -89,6 +89,25 @@ own scope was the matcher's expectation language, not retrieval-provenance track
 3. Full offline suite + a live `evals.edge_cases` run to confirm no `PRECEDENCE` case that
    currently passes starts failing.
 
+## Related finding (2026-08-24 final review): `cited_chunks` also carries unbounded duplicates
+
+A separate, whole-tree code review (not scoped to this ticket) found that
+`answer_question()`'s `cited_chunks.extend(sc.chunk for sc in results)` (`src/agent.py`) never
+dedupes across search calls. With `SEARCH_K = 10` and `MAX_TOOL_ITERATIONS = 8`, a multi-hop
+question can accumulate far more chunk entries than the ~73-chunk corpus actually has,
+duplicates included — and `build_verification_prompt()` serializes all of them into the
+verifier's context verbatim. Not a correctness bug (no wrong answer traced to it), but real
+cost on every question and a signal-quality risk for the verifier (a repeated excerpt reads as
+independent corroborating evidence). The reviewer's own recommendation, and the reason it's
+recorded here rather than as a separate ticket: this is the same root tension as the rest of
+this ticket — `cited_chunks` is being asked to serve three different consumers (the
+verification prompt, the citation check, and the eval matcher's `doc_type`/`version_year`
+checks) with three different implicit semantics. Whoever picks up either suggested-fix
+direction above should dedupe at the same time, not patch it separately — `Chunk` can't go in
+a `set` directly (`DocMeta` is `frozen=True` but holds a `list[str] | None` field, so
+`hash()` raises `TypeError`), so any fix needs a derived dedup key (e.g.
+`(chunk.doc.file, chunk.section_title, chunk.text)`).
+
 ## Files involved
 
 - `evals/edge_cases.py` — the `PRECEDENCE` list's comment now documents this limitation

@@ -131,6 +131,17 @@ def test_verification_prompt_credits_closed_list_exclusion_inference():
     assert "refer" in lowered
 
 
+def test_verification_prompt_introduces_all_three_credited_patterns_by_the_right_count():
+    # Real bug found in final review: the lead-in sentence introducing the credited-pattern
+    # list said "two specific reasoning patterns" while the list itself has three — (c),
+    # closed-list exclusion, was added after (a)/(b) shipped and the lead-in was never
+    # updated. Telling the model to expect two before handing it three is exactly the kind of
+    # mismatch that could make it under-credit the third, which is the pattern (c) exists to
+    # fix in the first place.
+    prompt = build_verification_prompt("draft", [CHUNK])
+    assert "three specific reasoning patterns" in prompt
+
+
 def test_verify_answer_prompt_includes_draft_and_excerpts():
     captured = {}
 

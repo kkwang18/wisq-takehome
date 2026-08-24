@@ -43,10 +43,9 @@ def test_precedence_rules_are_retrievable(index):
     assert any("takes precedence" in r.chunk.text.lower() for r in regional_results)
 
 
-def test_apac_scope_is_retrievable_to_rule_out_california():
+def test_apac_scope_is_retrievable_to_rule_out_california(index):
     """The agent needs to be able to find that APAC only covers China/Japan/Taiwan
     in order to correctly conclude California isn't covered by it."""
-    index_ = build_index("documents.yaml")
-    results = index_.search("which countries does this regional handbook apply to", k=SEARCH_K, doc_type="regional_handbook")
+    results = index.search("which countries does this regional handbook apply to", k=SEARCH_K, doc_type="regional_handbook")
     texts = " ".join(r.chunk.text for r in results)
     assert "Taiwan" in texts

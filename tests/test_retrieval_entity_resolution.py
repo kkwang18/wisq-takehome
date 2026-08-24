@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from src.retrieval import SEARCH_K, VectorIndex
+from ingest import build_index
+from src.retrieval import SEARCH_K
 
 
 @pytest.fixture(scope="module")
 def index():
-    return VectorIndex.load("index")
+    return build_index("documents.yaml")
 
 
 def _section_titles(results):

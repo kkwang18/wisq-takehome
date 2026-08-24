@@ -18,30 +18,26 @@ def test_load_manifest_filters_to_active_entries():
     assert docs[0].split_sentences_in_sections is None
 
 
-def test_load_manifest_reads_split_sentences_in_sections_when_present():
+def test_load_manifest_reads_split_sentences_in_sections_when_present(tmp_path):
     import yaml
 
     raw = yaml.safe_load(FIXTURE.read_text())
     raw[0]["split_sentences_in_sections"] = ["SCOPE"]
-    tmp = FIXTURE.parent / "sample_manifest_with_split_sections.yaml"
+    tmp = tmp_path / "sample_manifest_with_split_sections.yaml"
     tmp.write_text(yaml.safe_dump(raw))
-    try:
-        docs = load_manifest(str(tmp))
-        assert docs[0].split_sentences_in_sections == ["SCOPE"]
-    finally:
-        tmp.unlink()
+
+    docs = load_manifest(str(tmp))
+    assert docs[0].split_sentences_in_sections == ["SCOPE"]
 
 
-def test_load_manifest_preserves_jurisdictions_list():
+def test_load_manifest_preserves_jurisdictions_list(tmp_path):
     import yaml
 
     raw = yaml.safe_load(FIXTURE.read_text())
     raw[1]["active"] = True
-    tmp = FIXTURE.parent / "sample_manifest_all_active.yaml"
+    tmp = tmp_path / "sample_manifest_all_active.yaml"
     tmp.write_text(yaml.safe_dump(raw))
-    try:
-        docs = load_manifest(str(tmp))
-        regional = [d for d in docs if d.doc_type == "regional_handbook"][0]
-        assert regional.jurisdictions == ["Testland"]
-    finally:
-        tmp.unlink()
+
+    docs = load_manifest(str(tmp))
+    regional = [d for d in docs if d.doc_type == "regional_handbook"][0]
+    assert regional.jurisdictions == ["Testland"]

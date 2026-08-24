@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Union
 
 from src.verification import VerifiedAnswer
 
@@ -54,6 +55,13 @@ class Expectation:
     forbidden: list[str] = field(default_factory=list)
     doc_type: str | None = None
     version_year: int | None = None
+
+
+# What an eval case's expected value may be: a plain marker/keyword, a compound list/tuple of
+# such markers (ANDed), or a structured Expectation. typing.Union, not `|`, since this is a
+# real runtime expression (not a deferred annotation) and this repo targets Python 3.9, where
+# the `|` union operator isn't valid outside annotations.
+ExpectedValue = Union[str, list, tuple, Expectation]
 
 
 _UNITS = {
@@ -128,7 +136,15 @@ def _check_expectation(expectation: Expectation, result: VerifiedAnswer) -> list
     """Every reason `expectation` fails to match `result`, one entry per failing sub-check.
     Empty list means it matches. Single source of truth for Expectation checking —
     _matches_expectation() and explain() are both thin wrappers around this, so a new field or
-    a fix to an existing one only needs to change one place."""
+    a fix to an existing one only needs to change one place.
+
+    Every assertion-shaped check (the system confirmed/stated something) requires
+    grounded=True, since verify_answer's fallback text echoes the verifier's raw rejection
+    reason verbatim — a rejected answer's reason can mention almost anything without the
+    system having claimed it. forbidden is the one deliberate exception: it's a negative
+    check ("this must not appear"), and an ungrounded rejection's echoed reasoning isn't the
+    system asserting the forbidden thing either, so forbidden is skipped (not failed) when
+    ungrounded rather than gated the same way."""
     reasons = []
     if expectation.numeric is not None and not _matches_numeric_expectation(expectation.numeric, result):
         found = _normalize_numbers(result.text)
@@ -148,9 +164,12 @@ def _check_expectation(expectation: Expectation, result: VerifiedAnswer) -> list
             cited = {c.doc.version_year for c in result.cited_chunks}
             reasons.append(f"version_year: expected {expectation.version_year!r}, grounded={result.grounded}, cited {cited or 'nothing'}")
     if expectation.required:
-        missing = [t for t in expectation.required if not _term_boundary_matches(t, result.text)]
-        if missing:
-            reasons.append(f"required: missing {missing}")
+        if not result.grounded:
+            reasons.append("required: expected grounded=True")
+        else:
+            missing = [t for t in expectation.required if not _term_boundary_matches(t, result.text)]
+            if missing:
+                reasons.append(f"required: missing {missing}")
     if expectation.forbidden and result.grounded:
         present = [t for t in expectation.forbidden if t.lower() in result.text.lower()]
         if present:
@@ -181,7 +200,7 @@ def _term_boundary_matches(term: str, text: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def matches(expected, result: VerifiedAnswer) -> bool:
+def matches(expected: ExpectedValue, result: VerifiedAnswer) -> bool:
     if isinstance(expected, Expectation):
         return _matches_expectation(expected, result)
     # A list/tuple of conditions means ALL must hold — for a compound question that mixes a
@@ -202,7 +221,7 @@ def matches(expected, result: VerifiedAnswer) -> bool:
     return result.grounded and _numeric_boundary_matches(expected, result.text)
 
 
-def explain(expected, result: VerifiedAnswer) -> str:
+def explain(expected: ExpectedValue, result: VerifiedAnswer) -> str:
     """Human-readable reason `expected` didn't match `result`, for eval-failure printing.
     Only meaningful to call when matches(expected, result) is already False."""
     if not isinstance(expected, Expectation):

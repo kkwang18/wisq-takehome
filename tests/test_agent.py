@@ -163,6 +163,10 @@ def _text_response(text: str):
     return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=text)])
 
 
+def _max_tokens_response():
+    return SimpleNamespace(stop_reason="max_tokens", content=[])
+
+
 def _verify_response(verdict: str, reason: str = ""):
     return SimpleNamespace(
         stop_reason="tool_use",
@@ -239,5 +243,18 @@ def test_answer_question_completes_normally_within_iteration_cap():
     assert result.grounded is True
     assert result.text == "15 days per year.\n\nStandard global entitlement.\n\n— (Test Handbook, 4.2 PTO)"
     assert len(client.messages.calls) == 3
+    assert len(result.cited_chunks) == 1
+
+
+def test_answer_question_fails_closed_when_generation_is_cut_off():
+    # A response cut off by max_tokens must never be treated as a usable draft — this is the
+    # other fail-closed early return alongside the iteration cap, and previously had no test
+    # coverage of its own (found in final review).
+    client = _ScriptedClient([_search_response("call_1"), _max_tokens_response()])
+
+    result = answer_question("What is PTO?", _StubIndex(), client=client)
+
+    assert result.grounded is False
+    assert "cut off" in result.text.lower()
     assert len(result.cited_chunks) == 1
     assert result.cited_chunks[0].doc.display_name == "Test Handbook"

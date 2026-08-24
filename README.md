@@ -4,8 +4,8 @@ Answers questions about Acme's employee handbooks using retrieval-augmented gene
 local embeddings for search, Claude for multi-hop reasoning over conflicting/versioned
 policy documents, with a grounding-verification pass before any answer is returned.
 
-See `docs/DESIGN.md` for the current system design (components, tradeoffs, known
-limitations, and the roadmap to scale), `docs/TRANSCRIPT.md` for the full conversation that
+See `docs/DESIGN.md` for the current system design (invariants, architecture, known failure
+modes, and the roadmap to scale), `docs/TRANSCRIPT.md` for the full conversation that
 shaped it (`docs/HISTORY.md` is a short, section-linked index into it — start there), and
 `docs/backlog/` for known gaps and deferred work with full write-ups (not just a one-line
 TODO each). `docs/superpowers/specs/2026-08-19-rag-qa-system-design.md` is the original
@@ -43,7 +43,8 @@ Needs a real API key from here on:
 
     pytest                       # fast, fully offline, no API key: unit tests + retrieval recall checks
     python -m evals.eval         # needs ANTHROPIC_API_KEY: the 8 take-home example queries
-    python -m evals.edge_cases   # needs ANTHROPIC_API_KEY, slower and pricier: 36-case
+    python -m evals.edge_cases   # needs ANTHROPIC_API_KEY, slower and pricier: 38-case
                                   # production-readiness suite (entity resolution, negative
-                                  # space, grounding, consistency, precedence generalization)
-                                  # — run on demand, not on every commit
+                                  # space, grounding, consistency, precedence generalization,
+                                  # entity-hallucination guard) — run on demand, not on every
+                                  # commit
