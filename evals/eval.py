@@ -29,7 +29,7 @@ def main() -> None:
     for question, expected in EXPECTED:
         result = answer_question(question, index)
         print(f"Q: {question}\n{result.text}\n{'-' * 80}")
-        if not matches(expected, result.text, result.grounded):
+        if not matches(expected, result):
             failures.append((question, expected, result.text))
 
     if failures:

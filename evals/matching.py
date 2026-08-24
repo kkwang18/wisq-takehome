@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from src.verification import VerifiedAnswer
+
 # Union of both files' marker lists as they stood before this extraction — eval.py had
 # "no matching handbook version"/"no handbook version exists"; edge_cases.py had "no fixed
 # number". Neither file loses a marker it relied on; since these are OR'd, a superset can
@@ -50,20 +52,20 @@ def _numeric_boundary_matches(marker: str, text: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def matches(expected, result_text: str, grounded: bool) -> bool:
+def matches(expected, result: VerifiedAnswer) -> bool:
     # A list/tuple of conditions means ALL must hold — for a compound question that mixes a
     # false premise with a genuinely-unanswerable sub-question, a single marker can't tell a
     # correct answer from one that got the premise right by luck while hallucinating the
     # other half (see tests/test_matching.py for the live case that exposed this).
     if isinstance(expected, (list, tuple)):
-        return all(matches(e, result_text, grounded) for e in expected)
-    lowered = result_text.lower()
+        return all(matches(e, result) for e in expected)
+    lowered = result.text.lower()
     if expected == "unknown":
-        return any(marker in lowered for marker in UNKNOWN_MARKERS) or not grounded
+        return any(marker in lowered for marker in UNKNOWN_MARKERS) or not result.grounded
     if expected == "hedge":
         # Unlike "unknown", a hedge/numeric expectation implies the system actually confirmed
         # the figure or ambiguity — an ungrounded rejection must never satisfy it just because
         # the rejection text happens to contain a matching word/digit by accident (a rejected
         # draft's dumped verifier reasoning can echo almost anything from the source excerpts).
-        return grounded and any(word in lowered for word in HEDGE_MARKERS)
-    return grounded and _numeric_boundary_matches(expected, result_text)
+        return result.grounded and any(word in lowered for word in HEDGE_MARKERS)
+    return result.grounded and _numeric_boundary_matches(expected, result.text)

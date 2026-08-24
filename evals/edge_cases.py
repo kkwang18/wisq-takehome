@@ -106,7 +106,7 @@ def main() -> None:
             total += 1
             result = answer_question(question, index)
             print(f"Q: {question}\n{result.text}\n{'-' * 80}")
-            if not matches(expected, result.text, result.grounded):
+            if not matches(expected, result):
                 failures.append((category, question, expected, result.text))
 
     if failures:
