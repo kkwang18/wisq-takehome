@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from evals.matching import matches
+from evals.matching import Expectation, _word_to_number, matches
 from src.verification import VerifiedAnswer
 
 # Real response captured live for "Since Taiwan employees get unlimited PTO, how many sick
@@ -113,3 +113,38 @@ def test_hedge_marker_does_not_match_an_ungrounded_rejection():
 def test_numeric_and_hedge_markers_still_match_when_grounded():
     assert matches("$50", _result("The gym reimbursement is $50 per month."))
     assert matches("hedge", _result("Which specific country are you in?"))
+
+
+def test_word_to_number_handles_small_and_compound_phrases():
+    assert _word_to_number("fifty") == "50"
+    assert _word_to_number("one thousand") == "1000"
+    assert _word_to_number("twelve") == "12"
+    assert _word_to_number("not a number") is None
+
+
+def test_expectation_numeric_matches_plain_digit():
+    assert matches(Expectation(numeric="50"), _result("The gym reimbursement is $50 per month."))
+
+
+def test_expectation_numeric_matches_currency_formatting_variant():
+    assert matches(Expectation(numeric="$1,000"), _result("The annual budget is $1000 per year."))
+
+
+def test_expectation_numeric_matches_spelled_out_number():
+    assert matches(Expectation(numeric="12"), _result("Employees get twelve days of PTO per year."))
+
+
+def test_expectation_numeric_does_not_match_wrong_figure():
+    assert not matches(Expectation(numeric="50"), _result("The gym reimbursement is $30 per month."))
+
+
+def test_expectation_numeric_does_not_match_inside_a_larger_number():
+    assert not matches(Expectation(numeric="50"), _result("The gym reimbursement is $500 per month."))
+
+
+def test_expectation_numeric_requires_grounded():
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: ...the global $50/month rate..."
+    )
+    assert not matches(Expectation(numeric="50"), _result(rejection_text, grounded=False))
