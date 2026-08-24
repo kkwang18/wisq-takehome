@@ -214,3 +214,33 @@ def test_expectation_doc_type_and_version_year_combine_with_numeric():
     result = _result("15 days per year.", cited_chunks=[_GLOBAL_CHUNK])
     assert matches(Expectation(numeric="15", doc_type="global_handbook", version_year=2026), result)
     assert not matches(Expectation(numeric="15", doc_type="global_handbook", version_year=2025), result)
+
+
+def test_expectation_required_and_forbidden_together():
+    text = "12 days per year. Taiwan is covered by the APAC regional handbook."
+    assert matches(Expectation(required=["12", "Taiwan"], forbidden=["Singapore"]), _result(text))
+
+
+def test_expectation_required_fails_when_a_term_is_missing():
+    text = "12 days per year."
+    assert not matches(Expectation(required=["12", "Taiwan"]), _result(text))
+
+
+def test_expectation_required_uses_numeric_boundary_matching():
+    assert not matches(Expectation(required=["50"]), _result("The gym reimbursement is $500 per month."))
+
+
+def test_expectation_forbidden_fails_when_term_present():
+    text = "The APAC handbook covers China, Japan, Taiwan, and Singapore."
+    assert not matches(Expectation(forbidden=["Singapore"]), _result(text))
+
+
+def test_expectation_forbidden_is_skipped_on_an_ungrounded_rejection():
+    # Same false-positive-risk rationale as the existing numeric/hedge grounded-gating: a
+    # rejected draft's dumped verifier reasoning can echo almost any text from the source
+    # excerpts while explaining why something is wrong — that's not the system claiming it.
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: the draft wrongly named Singapore as covered."
+    )
+    assert matches(Expectation(forbidden=["Singapore"]), _result(rejection_text, grounded=False))

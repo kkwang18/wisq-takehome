@@ -144,6 +144,12 @@ def _matches_expectation(expectation: Expectation, result: VerifiedAnswer) -> bo
     if expectation.version_year is not None:
         if not any(c.doc.version_year == expectation.version_year for c in result.cited_chunks):
             return False
+    if expectation.required:
+        if not all(_numeric_boundary_matches(term, result.text) for term in expectation.required):
+            return False
+    if expectation.forbidden and result.grounded:
+        if any(term in result.text for term in expectation.forbidden):
+            return False
     return True
 
 
