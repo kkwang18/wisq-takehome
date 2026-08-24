@@ -278,6 +278,30 @@ take-home's 8 example queries correctly — including two with no clean numeric 
   this change, logged as new evidence on that ticket rather than acted on, per that ticket's
   standing "hold" decision. Committed once git identity was configured.
 
+## 14. The eval matcher redesign: full brainstorm-to-merge cycle (§37)
+
+- **§37 — Structured `Expectation` checks replace/extend keyword matching, built via the full
+  Superpowers pipeline end to end.** Brainstorming classified this Architectural (the matcher's
+  expectation format is an interface ~44 eval cases depend on); four clarifying questions each
+  landed on the recommended, most conservative option — fully deterministic (no LLM-judge
+  fallback), additive alongside the existing plain-string markers, structured metadata against
+  real `cited_chunks` rather than citation-text parsing. Spec → 9-task plan → subagent-driven
+  execution: fresh implementer + reviewer per task, all 9 clean on first review. Live
+  verification (Task 9) found real signal: 4 pre-existing unrelated eval flakes, a second
+  same-day reproduction of the still-open carve-out-overgeneralization ticket (left unfixed,
+  per that ticket's standing hold), and one genuine, load-bearing bug in the new `required`
+  field's boundary matcher — root-caused via a direct regex reproduction, fixed with a
+  purpose-built new function rather than patching the widely-relied-upon shared one (a
+  deliberate, ledgered deviation from the plan's literal text), then re-verified live
+  end-to-end. The final whole-branch review (fresh eyes on the full diff) caught something no
+  task-scoped review could: `VerifiedAnswer.cited_chunks` accumulates every chunk retrieved in
+  a whole conversation, not just what the answer cited, making the new `doc_type`/`version_year`
+  checks a much weaker precondition than their own migration comment claimed. Fixed the
+  comment, the missing `grounded` gate, and a real duplicated-logic risk in one bundled fix
+  wave; deliberately deferred two lower-priority findings to new backlog tickets instead of
+  redesigning mid-branch. Merged locally onto `main` after a second full test confirmation;
+  offline count went from 81 to 111 across the whole arc.
+
 ## Process
 
 Built with the superpowers plugin: brainstorming → design spec → implementation plan →

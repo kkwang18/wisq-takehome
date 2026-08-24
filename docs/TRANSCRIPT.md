@@ -1647,3 +1647,95 @@ still isn't a before/after baseline, per that ticket's own stated bar.
 
 Committed the citation-scoping change once the user configured git's local identity (the
 commit had failed earlier in the session with "Author identity unknown").
+
+## 37. The eval matcher redesign: brainstorming → spec → plan → subagent-driven build → merge
+
+**User** invoked `superpowers:brainstorming` directly, asking to fix the eval matcher's
+keyword/substring approach to also understand numeric equivalence, explicit unknown/hedged
+answers, rejected answers, document/version correctness, and required-vs-forbidden claims.
+Classified Architectural (the matcher's expectation format is the interface all ~44 existing
+eval cases depend on, and two of the five asks needed data — `VerifiedAnswer.cited_chunks` —
+the matcher didn't have). Read `evals/matching.py`/`eval.py`/`edge_cases.py`/
+`tests/test_matching.py` in full before proposing anything; found the existing "unknown"
+marker's `wording OR not grounded` logic was already a real bug-masking gap the redesign
+needed to fix, not just extend. Four clarifying questions, each with a recommended option the
+user picked every time: fully deterministic (no LLM-judge fallback — importing sampling
+variance into the harness meant to catch that exact problem elsewhere was rejected on
+principle); currency/comma/spelled-out-number equivalence only (not units); structured
+metadata against real `cited_chunks`, not citation-text parsing, for document/version checks;
+additive `Expectation` dataclass alongside the existing plain-string shorthand, not a full
+migration. Design presented in 7 sections, approved as-is. Spec written to
+`docs/superpowers/specs/2026-08-24-eval-matcher-redesign-design.md`, self-reviewed (added one
+clarifying note pre-empting a specific, known-dangerous misreading: don't import
+`VectorIndex.search()`'s "`None` matches any year filter" retrieval-time rule into this
+after-the-fact metadata check), committed.
+
+`superpowers:writing-plans` produced a 9-task plan
+(`docs/superpowers/plans/2026-08-24-eval-matcher-redesign.md`): `VerifiedAnswer.cited_chunks`
+→ `matches()` signature refactor → `Expectation` + numeric equivalence → unknown/hedge/rejected
+split → doc_type/version_year checks → required/forbidden → `explain()` diagnostics → migrate
+`PRECEDENCE` + add an entity-hallucination-guard category → live verification. Self-review
+caught and fixed one real defect before handoff: a duplicate-import instruction in Task 3 that
+would have double-imported `Expectation`.
+
+**User** chose Subagent-Driven execution. Per the skill's own rule ("never start on
+main/master without explicit consent") and given this run would make ~9+ unsupervised commits
+with no per-commit check-in — a materially bigger step than this session's established
+one-commit-at-a-time pattern — asked explicitly rather than assuming continuation of that
+pattern. **User chose an isolated worktree.** Bypassed the native `EnterWorktree` tool
+deliberately: its default `baseRef` branches from `origin/main`, which was 2 commits behind
+local `main` (missing the plan/spec commits and the session's citation-scoping fix) — created
+the worktree manually from local HEAD instead, after committing the plan file that would
+otherwise have been left behind as an untracked file the worktree wouldn't inherit.
+
+All 9 tasks executed: fresh implementer (haiku, since every task's plan text already contained
+complete code — pure transcription-plus-testing) + fresh reviewer (sonnet) per task, each
+review scoped with the specific correctness point most likely to hide a bug (the `AND` vs `OR`
+logic in unknown/hedge; the `any()` vs `all()` and `version_year=None` semantics in doc/version
+checks; the direction of `forbidden`'s `grounded`-gating). All 9 came back clean on first
+review; one Minor (a report's self-reported test-count arithmetic, no code impact) logged and
+deferred per the skill's own rule that minors never enter the fix loop.
+
+Live verification (Task 9) found real signal beyond the plan's own predictions. `evals.eval`:
+8/8. `evals.edge_cases`: 32/38 — diagnosed all 6 failures individually rather than reporting
+the count: 4 were pre-existing, already-documented, unrelated-to-this-branch issues (a stale
+test expectation, two `UNKNOWN_MARKERS` phrasing gaps, one LLM draft-generation sampling
+miss); 1 was a fresh, cleaner, single-mechanism reproduction of the still-open carve-out-
+overgeneralization ticket (§30/§36) — logged as a second same-day occurrence, left unfixed per
+that ticket's standing hold; 1 was a genuine, load-bearing bug in this branch's own new
+`required` capability, reproduced directly (not assumed) via a standalone regex check: the
+boundary-matcher it reused from numeric markers excluded any trailing comma, so a required
+word immediately followed by a comma in ordinary prose (`"China, Japan, and Taiwan"`) silently
+failed to match. Ruled against patching the shared, widely-relied-upon numeric-boundary
+function (would reopen the false-positive class it exists to prevent); added a new,
+purpose-built word-boundary matcher instead — a deliberate deviation from the plan's literal
+Task 6 text, ledgered as a ruling. Fixed via the same implementer+reviewer cycle, then
+re-verified live end-to-end (not just via the offline regression test): the two
+`entity_hallucination_guard` cases that had failed now passed 2/2 live.
+
+Final whole-branch review (opus, fresh eyes on the full 10-commit diff) returned "Ready to
+merge: With fixes" — no Critical findings, but a real one worth naming: the reviewer
+independently verified against the live index that `VerifiedAnswer.cited_chunks` accumulates
+*every* chunk retrieved across a whole conversation, not just what the answer's citation names
+— meaning the new `doc_type`/`version_year` checks were satisfied by nearly any retrieval for
+a precedence question, making the `PRECEDENCE` migration's own comment (claiming these checks
+"assert which document actually governed the answer") false. Also found the `doc_type`/
+`version_year` fields weren't `grounded`-gated (inconsistent with every sibling field), and
+that `_matches_expectation()`/`explain()` fully duplicated all 8 field-checks verbatim — a
+risk the branch had already tripped over once, during the Task 9 fix. Bundled 3 Important +
+4 low-risk Minor findings into one fix-wave dispatch (case-insensitive `forbidden`, a stale
+test rename, mid-file import hoisting, a defensive `list()` copy on `cited_chunks`);
+deliberately deferred the 2 remaining findings (the deeper `cited_chunks`-semantics gap; a
+narrow, currently-unreachable `required`-numeric-term edge case the Task 9 fix's own word-
+boundary approach reopens) to two new backlog tickets rather than redesigning mid-fix-wave.
+Fix wave landed clean on first scoped re-review (verified live, not just via the report:
+re-ran the exact `grounded=False` reproduction the reviewer used). Controller directly updated
+`CLAUDE.md`/`docs/DESIGN.md`'s stale test counts and the "Eval harness rigor" tradeoff/roadmap
+sections afterward — docs-only, no code-review gate needed for known-facts corrections.
+
+**User** chose to merge locally (not push/PR). Fast-forwarded onto `main` (`ab4ed50..2d7898c`,
+13 files, +723/-129), re-confirmed 111/111 on the merged result from the main repo (not just
+the worktree), then cleaned up: worktree removed, feature branch deleted, SDD workspace
+removed (git history is the permanent record now). Final offline count: 81 → 111 across this
+whole arc. Two new backlog tickets and one carve-out-ticket update are the durable trace of
+what was deliberately deferred, not silently dropped.
