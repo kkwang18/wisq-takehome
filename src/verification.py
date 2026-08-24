@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from src.models import Chunk
@@ -11,6 +11,7 @@ class VerifiedAnswer:
     text: str
     grounded: bool
     rejected_draft: str | None = None
+    cited_chunks: list[Chunk] = field(default_factory=list)
 
 
 def _extract_citation(draft: str) -> str:
@@ -75,6 +76,7 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
         return VerifiedAnswer(
             text="No policy excerpts were retrieved, so this answer cannot be grounded in the handbooks.",
             grounded=False,
+            cited_chunks=cited_chunks,
         )
 
     citation_text = _extract_citation(draft)
@@ -84,6 +86,7 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
             "cannot be confirmed as grounded.",
             grounded=False,
             rejected_draft=draft,
+            cited_chunks=cited_chunks,
         )
 
     prompt = build_verification_prompt(draft, cited_chunks)
@@ -94,10 +97,10 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
     # is a general-purpose function any llm_call implementation can drive. "UNSUPPORTED" does
     # not start with "SUPPORTED" even uppercased (it starts with "UN"), so this stays safe.
     if verdict.upper().startswith("SUPPORTED"):
-        return VerifiedAnswer(text=draft, grounded=True)
+        return VerifiedAnswer(text=draft, grounded=True, cited_chunks=cited_chunks)
 
     fallback = (
         "I can't confirm this from the retrieved policy text alone — "
         f"the verification check flagged: {verdict}"
     )
-    return VerifiedAnswer(text=fallback, grounded=False, rejected_draft=draft)
+    return VerifiedAnswer(text=fallback, grounded=False, rejected_draft=draft, cited_chunks=cited_chunks)

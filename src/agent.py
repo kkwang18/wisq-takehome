@@ -225,6 +225,7 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
             return VerifiedAnswer(
                 text="Answer generation required too many tool calls to converge; not returning a partial answer.",
                 grounded=False,
+                cited_chunks=cited_chunks,
             )
         response = client.messages.create(
             model=MODEL,
@@ -245,6 +246,7 @@ def answer_question(question: str, index: VectorIndex, client: anthropic.Anthrop
             return VerifiedAnswer(
                 text="Answer generation was cut off before completion; not returning a partial answer.",
                 grounded=False,
+                cited_chunks=cited_chunks,
             )
 
         if response.stop_reason != "tool_use":

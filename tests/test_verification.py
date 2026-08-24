@@ -14,7 +14,23 @@ UNSUPPORTED_DRAFT = "20 days per year.\n\nStandard global entitlement.\n\n— (T
 
 def test_verify_answer_passes_through_supported_draft():
     result = verify_answer(SUPPORTED_DRAFT, [CHUNK], llm_call=lambda prompt: "SUPPORTED")
-    assert result == VerifiedAnswer(text=SUPPORTED_DRAFT, grounded=True)
+    assert result == VerifiedAnswer(text=SUPPORTED_DRAFT, grounded=True, cited_chunks=[CHUNK])
+
+
+def test_verify_answer_includes_cited_chunks_on_every_return_path():
+    # Empty-cited_chunks hard-fail: cited_chunks is [] going in, so it stays [] on the way out.
+    result = verify_answer("some draft", [], llm_call=lambda p: "SUPPORTED")
+    assert result.cited_chunks == []
+
+    # Citation-check hard-fail: cited_chunks was non-empty, so it must still be attached even
+    # though the draft itself was rejected before any LLM call.
+    draft = "15 days per year.\n\nStandard global entitlement.\n\n— (Fake Handbook, Section 1)"
+    result = verify_answer(draft, [CHUNK], llm_call=lambda p: "SUPPORTED")
+    assert result.cited_chunks == [CHUNK]
+
+    # LLM-rejected path.
+    result = verify_answer(UNSUPPORTED_DRAFT, [CHUNK], llm_call=lambda p: "UNSUPPORTED: nope")
+    assert result.cited_chunks == [CHUNK]
 
 
 def test_verify_answer_accepts_a_lowercase_or_mixed_case_supported_verdict():

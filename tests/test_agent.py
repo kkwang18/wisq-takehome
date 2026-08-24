@@ -219,6 +219,7 @@ def test_answer_question_stops_after_max_tool_iterations():
 
     assert result.grounded is False
     assert len(client.messages.calls) == MAX_TOOL_ITERATIONS
+    assert len(result.cited_chunks) == MAX_TOOL_ITERATIONS
 
 
 def test_answer_question_completes_normally_within_iteration_cap():
@@ -238,3 +239,5 @@ def test_answer_question_completes_normally_within_iteration_cap():
     assert result.grounded is True
     assert result.text == "15 days per year.\n\nStandard global entitlement.\n\n— (Test Handbook, 4.2 PTO)"
     assert len(client.messages.calls) == 3
+    assert len(result.cited_chunks) == 1
+    assert result.cited_chunks[0].doc.display_name == "Test Handbook"
