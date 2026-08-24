@@ -129,6 +129,15 @@ def _matches_expectation(expectation: Expectation, result: VerifiedAnswer) -> bo
     if expectation.numeric is not None:
         if not _matches_numeric_expectation(expectation.numeric, result):
             return False
+    if expectation.unknown:
+        if not (result.grounded and any(marker in result.text.lower() for marker in UNKNOWN_MARKERS)):
+            return False
+    if expectation.hedge:
+        if not (result.grounded and any(word in result.text.lower() for word in HEDGE_MARKERS)):
+            return False
+    if expectation.rejected:
+        if result.grounded:
+            return False
     return True
 
 

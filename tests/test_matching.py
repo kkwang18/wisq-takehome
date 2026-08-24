@@ -148,3 +148,33 @@ def test_expectation_numeric_requires_grounded():
         "flagged: UNSUPPORTED: ...the global $50/month rate..."
     )
     assert not matches(Expectation(numeric="50"), _result(rejection_text, grounded=False))
+
+
+def test_expectation_unknown_requires_grounded_and_explicit_wording():
+    assert matches(Expectation(unknown=True), _result("There is no fixed number of sick days on file."))
+    assert not matches(Expectation(unknown=True), _result("12 days per year."))
+
+
+def test_expectation_unknown_does_not_count_an_ungrounded_rejection():
+    # The key gap this splits from today's plain "unknown" marker (which is satisfied by
+    # `not grounded` alone): a verifier rejection must not silently pass as if the system had
+    # correctly determined the answer is unknown.
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: the draft's figure isn't stated in the excerpts."
+    )
+    assert not matches(Expectation(unknown=True), _result(rejection_text, grounded=False))
+
+
+def test_expectation_hedge_requires_grounded_and_hedge_wording():
+    assert matches(Expectation(hedge=True), _result("Which specific country are you in?"))
+    assert not matches(Expectation(hedge=True), _result("15 days per year."))
+
+
+def test_expectation_rejected_requires_grounded_false():
+    rejection_text = (
+        "I can't confirm this from the retrieved policy text alone — the verification check "
+        "flagged: UNSUPPORTED: the draft wrongly claims $30 applies."
+    )
+    assert matches(Expectation(rejected=True), _result(rejection_text, grounded=False))
+    assert not matches(Expectation(rejected=True), _result("15 days per year."))
