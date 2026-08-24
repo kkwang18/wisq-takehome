@@ -80,20 +80,25 @@ these true — they're the actual correctness contract, not stylistic defaults:
 
 ## Current status
 
-(as of 2026-08-23)
+(as of 2026-08-24)
 
-80 offline tests pass (`pytest`). `evals.eval` (8 take-home queries) passes 8/8 live — last
-verified 2026-08-22, after `build_verification_prompt`'s third credited inference pattern
-("closed-list exclusion"). Full diagnosis and adversarial-testing evidence:
-`docs/backlog/2026-08-20-verify-answer-absence-inference-false-rejection.md`'s "Second fix
-implemented" section.
+111 offline tests pass (`pytest`). `evals.eval` (8 take-home queries) passes 8/8 live — last
+verified 2026-08-24. `evals.edge_cases` is now a 38-case suite (36 original + 2 added for
+named-entity-hallucination regression coverage); last full run scored 32/38, with all 6
+failures individually diagnosed rather than just counted: 1 fresh-but-known
+`verify_answer` carve-out-overgeneralization recurrence (see backlog ticket below — now two
+same-day reproductions), 1 already-documented stale test expectation, 3 already-documented
+`evals/matching.py` marker-phrasing gaps in categories unrelated to any change since, and 1
+real matcher bug (found live, root-caused, fixed, and re-verified live 2/2 — see
+`docs/superpowers/plans/2026-08-24-eval-matcher-redesign.md`'s SDD ledger for the full account).
 
-`evals.edge_cases` (36-case suite) last ran 32/36 on 2026-08-22, **before** that fix — 1 of
-the 4 failures was the exact recurrence it resolved, so a fresh run would likely score higher;
-rerun before trusting a specific number. The other 3, already diagnosed as non-regressions:
-1 stale test expectation (documented in place in `evals/edge_cases.py`, not "fixed" by
-weakening the anti-hallucination guardrail), 1 eval-matcher gap (fixed), 1 evidence for the
-still-open carve-out ticket below.
+`evals/matching.py` was substantially extended this session: a structured `Expectation` type
+now supports numeric equivalence, `unknown`/`hedge`/`rejected` as three distinct, correctly-
+`grounded`-gated outcomes, document/version correctness against real retrieval metadata
+(`VerifiedAnswer.cited_chunks`, new this session), and required/forbidden claims — additive
+alongside the original plain string/list markers, which are unchanged. Deterministic
+throughout; no LLM calls added to the eval harness. `src/verification.py`'s citation check was
+also tightened this session to scan only the parsed-out citation field, not the whole draft.
 
 Open backlog (`docs/backlog/`), deliberately deferred with trigger conditions documented in
 each: `2026-08-20-vector-db-migration-for-scale.md`, `2026-08-20-llm-assisted-semantic-chunking.md`,
@@ -101,6 +106,11 @@ each: `2026-08-20-vector-db-migration-for-scale.md`, `2026-08-20-llm-assisted-se
 because the live sample confirming it is too small to close confidently),
 `2026-08-22-verify-answer-carve-out-overgeneralization-false-rejection.md` (`verify_answer`
 can over-generalize one benefit's specific carve-out into false suspicion of a sibling benefit
-the same excerpt explicitly routes to the general rule; root cause confirmed analytically but
-not fresh-reproducible in 44 live reps — held without a fix, deliberately, pending a cleaner
-trigger). Remaining gaps in `docs/DESIGN.md`'s "Known limitations."
+the same excerpt explicitly routes to the general rule; root cause confirmed analytically, and
+now reproduced live twice in one day — still held without a fix, deliberately, pending a
+controlled before/after baseline), `2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`
+(the new `Expectation.doc_type`/`version_year` checks are a weaker precondition than they look
+— `cited_chunks` holds everything retrieved in a conversation, not just what was cited),
+`2026-08-24-eval-matcher-required-numeric-term-boundary-gap.md` (a narrow, currently-unused
+edge case in `required`'s boundary matching). Remaining gaps in `docs/DESIGN.md`'s "Known
+limitations."

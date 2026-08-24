@@ -45,7 +45,7 @@ Three things make this corpus harder than generic RAG: two nearly-identical glob
 | `src/agent.py` | The Claude tool-use loop that turns a question into a draft answer |
 | `src/verification.py` | The grounding check that turns a draft into a final answer |
 | `src/models.py` | Shared dataclasses (`DocMeta`, `Paragraph`, `Chunk`, `ScoredChunk`) |
-| `evals/` | Live-API acceptance suites (`eval.py`: 8 take-home queries; `edge_cases.py`: 36-case production-readiness suite) |
+| `evals/` | Live-API acceptance suites (`eval.py`: 8 take-home queries; `edge_cases.py`: 38-case production-readiness suite) |
 | `tests/` | Offline, zero-API-call unit + regression tests |
 | `docs/backlog/` | Fully-investigated deferred work — root cause, fix sketch, test plan already written |
 | `CLAUDE.md` | Session-continuity notes for AI agents working in this repo — orientation, correctness contract, gotchas |
@@ -236,18 +236,24 @@ reproduced (`docs/backlog/2026-08-22-verify-answer-carve-out-overgeneralization-
 **Choice:** two different kinds of correctness check, kept separate. `tests/` is offline,
 zero API calls, real local embeddings — the regression guard for chunking/retrieval/matching
 changes. `evals/` is live-API: `eval.py` runs the 8 take-home queries on every meaningful
-change; `edge_cases.py` is a 36-case production-readiness suite run on demand given its real
-API cost (~36 questions × 3-5 Claude calls each).
+change; `edge_cases.py` is a 38-case production-readiness suite run on demand given its real
+API cost (~38 questions × 3-5 Claude calls each).
 
 **Why:** offline tests are cheap enough to run constantly and catch retrieval/logic
 regressions instantly; live evals are the only way to catch LLM sampling-variance bugs, but
 cost real time and money, so they're reserved for meaningful changes rather than every commit.
 
-**Tradeoff:** `evals/matching.py`'s matcher (`matches()`) is a substring/keyword heuristic on
-free-form model output, not a semantic check — it's caught real bugs (numeric markers matching
-inside a larger number; a rejected answer "passing" by accidental substring coincidence, both
-since fixed) but remains gameable by phrasing. Treat a green eval run as a smoke test, not a
-strict regression gate.
+**Tradeoff:** `evals/matching.py`'s matcher (`matches()`) combines plain substring/keyword
+markers (still fully supported, unchanged) with a structured `Expectation` type — numeric
+equivalence, unknown/hedge/rejected as distinct outcomes, document/version correctness against
+real retrieval metadata, required/forbidden claims — deterministic throughout, no LLM calls in
+the harness itself. Both forms have caught real bugs (numeric markers matching inside a larger
+number; a rejected answer "passing" by accidental substring coincidence; the old plain
+`"unknown"` marker silently accepting a verifier rejection as if it were a confirmed unknown
+answer, all since fixed) but the plain-string form remains gameable by phrasing, and even
+`Expectation`'s document/version checks are a weaker precondition than they look
+(`docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md`). Treat a green
+eval run as a smoke test, not a strict regression gate.
 
 ## Design principles that cut across every component
 
@@ -331,16 +337,23 @@ answers for grounding-accuracy review the same way this project's live-verificat
 have been done manually all along. Trigger: before onboarding any real user traffic, not
 after.
 
-### 2. Eval harness rigor — replace substring heuristics before they hide something real
+### 2. Eval harness rigor — largely addressed; one precision gap remains, documented not fixed
 
-`evals/matching.py` has now caused or hidden real bugs twice: the numeric-boundary
-false-positive fix, and a `grounded`-blind-spot (numeric/hedge markers could "pass" against a
-rejected, ungrounded answer if the expected marker happened to appear in the dumped rejection
-text) — both since fixed. At the current scale this is a tolerable smoke test; it stops being
-tolerable as soon as more people are adding questions to `edge_cases.py` and trusting a green
-run without reading the output. Remaining: evaluate replacing keyword matching with an
-LLM-judge comparison against a gold answer for at least the harder cases. Trigger: before
-growing `edge_cases.py` much further, or before any CI gate depends on it.
+`evals/matching.py` caused or hid three real bugs before this was addressed: the
+numeric-boundary false-positive, a `grounded`-blind-spot, and the plain `"unknown"` marker's
+silent acceptance of a verifier rejection as a confirmed unknown answer — all fixed, the last
+one via the deliberately-chosen-deterministic `Expectation` type
+(`docs/superpowers/specs/2026-08-24-eval-matcher-redesign-design.md`), not an LLM-judge
+fallback (rejected explicitly: importing LLM sampling variance into the harness meant to catch
+that exact problem elsewhere in the system was judged worse than staying deterministic).
+Remaining gap, found by that same work's final review and deliberately deferred rather than
+fixed inline: `Expectation.doc_type`/`version_year` check against
+`VerifiedAnswer.cited_chunks`, which accumulates every chunk retrieved across a whole
+conversation, not just what the final answer cited — a weaker precondition than the checks
+appear to assert. See
+`docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md` for the two
+sketched fix directions. Trigger: before trusting a `PRECEDENCE` category pass as proof a
+specific document actually governed an answer, not just that it was retrieved.
 
 ### 3. Vector DB migration — designed and prototype-verified, deferred until the corpus grows
 
