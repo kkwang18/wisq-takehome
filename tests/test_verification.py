@@ -52,7 +52,6 @@ def test_verify_answer_downgrades_unsupported_draft():
     )
     assert result.grounded is False
     assert "20 days is not stated" in result.text
-    assert result.rejected_draft == UNSUPPORTED_DRAFT
 
 
 def test_verify_answer_still_rejects_uppercase_unsupported_as_unsupported():
@@ -68,7 +67,6 @@ def test_verify_answer_hard_fails_when_nothing_retrieved():
     result = verify_answer("some draft", [], llm_call=lambda p: calls.append(p) or "SUPPORTED")
     assert result.grounded is False
     assert "No policy excerpts were retrieved" in result.text
-    assert result.rejected_draft is None
     assert calls == []  # nice-to-have: llm_call should not be invoked at all
 
 
@@ -82,7 +80,6 @@ def test_verify_answer_hard_fails_when_citation_names_no_retrieved_document():
     result = verify_answer(draft, [CHUNK], llm_call=lambda p: calls.append(p) or "SUPPORTED")
     assert result.grounded is False
     assert "citation" in result.text.lower()
-    assert result.rejected_draft == draft
     assert calls == []
 
 
@@ -95,7 +92,6 @@ def test_verify_answer_rejects_when_doc_name_only_appears_outside_the_citation_f
     result = verify_answer(draft, [CHUNK], llm_call=lambda p: calls.append(p) or "SUPPORTED")
     assert result.grounded is False
     assert "citation" in result.text.lower()
-    assert result.rejected_draft == draft
     assert calls == []
 
 

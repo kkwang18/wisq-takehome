@@ -78,8 +78,7 @@ allowance for a Taiwanese employee?"` end to end:
    LLM call. Otherwise it asks Claude — via a second tool call,
    `report_verification` — whether every claim in the draft is backed by the cited excerpts.
 7. If `SUPPORTED`, the draft is returned as-is. If not, a fallback "can't confirm this"
-   message is returned instead, and the original draft is preserved on
-   `VerifiedAnswer.rejected_draft` for debugging.
+   message is returned instead.
 8. `main.py` prints `result.text`.
 
 Two full Claude round-trips minimum (search+answer, then verify) is a deliberate cost — see
@@ -318,8 +317,6 @@ that instead).
 - The word markers in `evals/matching.py` (`"unknown"`, `"which country"`, etc.) are
   substring/keyword matching on free-form text, not semantic — gameable by construction,
   already needed reactive patching as real phrasing varied.
-- `VerifiedAnswer.rejected_draft` is written on every downgrade but never read by any caller —
-  useful groundwork for a future `--debug` flag, currently dead weight.
 
 ## Path to scale — what to target next
 

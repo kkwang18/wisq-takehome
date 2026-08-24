@@ -94,9 +94,11 @@ cause of the clean streak.
 If this recurs, the next diagnostic step would be to log every draft `verify_answer`
 rejects (not just print during ad hoc debugging) so real-world fabrication rate and pattern
 can be measured over time without manual reproduction — this would also make it possible to
-tell, on a larger sample, whether the fix meaningfully changed the rate. Not implemented now
-because `VerifiedAnswer.rejected_draft` already exists for exactly this purpose but has no
-reader/logger wired up (see `CLAUDE.md` § 4 known gaps).
+tell, on a larger sample, whether the fix meaningfully changed the rate. Not implemented now.
+(`VerifiedAnswer` previously carried a `rejected_draft` field for exactly this purpose, but it
+was removed 2026-08-24 — written on every downgrade, never read by any caller, confirmed dead
+code by a repo-wide grep. If this follow-up is picked up, a similar field/logger would need to
+be reintroduced, this time with a real reader wired up from the start.)
 
 ## Files involved
 

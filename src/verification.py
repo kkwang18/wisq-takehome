@@ -10,7 +10,6 @@ from src.models import Chunk
 class VerifiedAnswer:
     text: str
     grounded: bool
-    rejected_draft: str | None = None
     cited_chunks: list[Chunk] = field(default_factory=list)
 
 
@@ -85,7 +84,6 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
             text="The answer's citation doesn't name any of the retrieved excerpts, so this "
             "cannot be confirmed as grounded.",
             grounded=False,
-            rejected_draft=draft,
             cited_chunks=list(cited_chunks),
         )
 
@@ -103,4 +101,4 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
         "I can't confirm this from the retrieved policy text alone — "
         f"the verification check flagged: {verdict}"
     )
-    return VerifiedAnswer(text=fallback, grounded=False, rejected_draft=draft, cited_chunks=list(cited_chunks))
+    return VerifiedAnswer(text=fallback, grounded=False, cited_chunks=list(cited_chunks))
