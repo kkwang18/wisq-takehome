@@ -138,6 +138,12 @@ def _matches_expectation(expectation: Expectation, result: VerifiedAnswer) -> bo
     if expectation.rejected:
         if result.grounded:
             return False
+    if expectation.doc_type is not None:
+        if not any(c.doc.doc_type == expectation.doc_type for c in result.cited_chunks):
+            return False
+    if expectation.version_year is not None:
+        if not any(c.doc.version_year == expectation.version_year for c in result.cited_chunks):
+            return False
     return True
 
 

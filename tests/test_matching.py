@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from evals.matching import Expectation, _word_to_number, matches
+from src.models import Chunk, DocMeta
 from src.verification import VerifiedAnswer
 
 # Real response captured live for "Since Taiwan employees get unlimited PTO, how many sick
@@ -178,3 +179,38 @@ def test_expectation_rejected_requires_grounded_false():
     )
     assert matches(Expectation(rejected=True), _result(rejection_text, grounded=False))
     assert not matches(Expectation(rejected=True), _result("15 days per year."))
+
+
+_GLOBAL_DOC = DocMeta(file="g.docx", doc_type="global_handbook", jurisdictions=None, version_year=2026, display_name="Acme Employee Handbook 2026")
+_APAC_DOC = DocMeta(file="a.docx", doc_type="regional_handbook", jurisdictions=["China", "Japan", "Taiwan"], version_year=None, display_name="APAC Benefits Handbook")
+_GLOBAL_CHUNK = Chunk(text="Standard PTO is 15 days.", section_title="4.2 PTO", doc=_GLOBAL_DOC)
+_APAC_CHUNK = Chunk(text="Regional PTO is 12 days.", section_title="Regional Benefits", doc=_APAC_DOC)
+
+
+def test_expectation_doc_type_matches_any_cited_chunk():
+    result = _result("12 days per year.", cited_chunks=[_GLOBAL_CHUNK, _APAC_CHUNK])
+    assert matches(Expectation(doc_type="regional_handbook"), result)
+
+
+def test_expectation_doc_type_fails_when_no_cited_chunk_matches():
+    result = _result("15 days per year.", cited_chunks=[_GLOBAL_CHUNK])
+    assert not matches(Expectation(doc_type="regional_handbook"), result)
+
+
+def test_expectation_version_year_matches_any_cited_chunk():
+    result = _result("15 days per year.", cited_chunks=[_GLOBAL_CHUNK])
+    assert matches(Expectation(version_year=2026), result)
+
+
+def test_expectation_version_year_none_does_not_match_a_specific_year():
+    # The evergreen APAC handbook's version_year=None must not satisfy a specific-year
+    # expectation — a plain equality check on real chunk metadata, not the
+    # VectorIndex.search() "None matches any year filter" retrieval-time special case.
+    result = _result("12 days per year.", cited_chunks=[_APAC_CHUNK])
+    assert not matches(Expectation(version_year=2026), result)
+
+
+def test_expectation_doc_type_and_version_year_combine_with_numeric():
+    result = _result("15 days per year.", cited_chunks=[_GLOBAL_CHUNK])
+    assert matches(Expectation(numeric="15", doc_type="global_handbook", version_year=2026), result)
+    assert not matches(Expectation(numeric="15", doc_type="global_handbook", version_year=2025), result)
