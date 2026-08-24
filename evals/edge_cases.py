@@ -64,9 +64,13 @@ CONSISTENCY = [
 # benefit-type/year combination this corpus supports — proving the logic isn't
 # Taiwan-specific is this category's entire point, so it does NOT collapse to one
 # representative. Also re-exercises the version_year retrieval fix (commit b7411e4) across
-# China/Japan, not just Taiwan. Each case now also asserts *which* document/version actually
-# governed the answer (Expectation.doc_type/.version_year against real cited_chunks), not just
-# the resulting figure — catching a case that gets the right number for the wrong reason.
+# China/Japan, not just Taiwan. Each case also asserts doc_type/version_year against
+# VerifiedAnswer.cited_chunks — but that field accumulates every chunk retrieved across the
+# whole conversation, not just what the final answer actually cited, so this is a weak
+# precondition ("the right document was at least retrieved this turn"), not proof the answer's
+# stated figure came from that document. See
+# docs/backlog/2026-08-24-eval-matcher-cited-chunks-weak-doc-version-check.md for tightening
+# this to true per-citation provenance.
 PRECEDENCE = [
     ("What is the PTO for an employee based in China in 2025?", Expectation(numeric="12", doc_type="regional_handbook")),
     ("What is the PTO for an employee based in China in 2026?", Expectation(numeric="12", doc_type="regional_handbook")),

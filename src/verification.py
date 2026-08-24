@@ -76,7 +76,7 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
         return VerifiedAnswer(
             text="No policy excerpts were retrieved, so this answer cannot be grounded in the handbooks.",
             grounded=False,
-            cited_chunks=cited_chunks,
+            cited_chunks=list(cited_chunks),
         )
 
     citation_text = _extract_citation(draft)
@@ -86,7 +86,7 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
             "cannot be confirmed as grounded.",
             grounded=False,
             rejected_draft=draft,
-            cited_chunks=cited_chunks,
+            cited_chunks=list(cited_chunks),
         )
 
     prompt = build_verification_prompt(draft, cited_chunks)
@@ -97,10 +97,10 @@ def verify_answer(draft: str, cited_chunks: list[Chunk], llm_call: Callable[[str
     # is a general-purpose function any llm_call implementation can drive. "UNSUPPORTED" does
     # not start with "SUPPORTED" even uppercased (it starts with "UN"), so this stays safe.
     if verdict.upper().startswith("SUPPORTED"):
-        return VerifiedAnswer(text=draft, grounded=True, cited_chunks=cited_chunks)
+        return VerifiedAnswer(text=draft, grounded=True, cited_chunks=list(cited_chunks))
 
     fallback = (
         "I can't confirm this from the retrieved policy text alone — "
         f"the verification check flagged: {verdict}"
     )
-    return VerifiedAnswer(text=fallback, grounded=False, rejected_draft=draft, cited_chunks=cited_chunks)
+    return VerifiedAnswer(text=fallback, grounded=False, rejected_draft=draft, cited_chunks=list(cited_chunks))

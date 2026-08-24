@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from evals.matching import Expectation, _word_to_number, matches
+from evals.matching import Expectation, _word_to_number, explain, matches
 from src.models import Chunk, DocMeta
 from src.verification import VerifiedAnswer
 
@@ -226,7 +226,7 @@ def test_expectation_required_fails_when_a_term_is_missing():
     assert not matches(Expectation(required=["12", "Taiwan"]), _result(text))
 
 
-def test_expectation_required_uses_numeric_boundary_matching():
+def test_expectation_required_does_not_match_inside_a_larger_number():
     assert not matches(Expectation(required=["50"]), _result("The gym reimbursement is $500 per month."))
 
 
@@ -244,9 +244,6 @@ def test_expectation_forbidden_is_skipped_on_an_ungrounded_rejection():
         "flagged: UNSUPPORTED: the draft wrongly named Singapore as covered."
     )
     assert matches(Expectation(forbidden=["Singapore"]), _result(rejection_text, grounded=False))
-
-
-from evals.matching import explain
 
 
 def test_explain_reports_plain_marker_unchanged():
@@ -287,3 +284,16 @@ def test_expectation_required_matches_a_term_immediately_followed_by_a_comma():
 def test_expectation_required_does_not_match_a_term_embedded_in_a_larger_word():
     result = _result("The Chinatown district has its own local rules.")
     assert not matches(Expectation(required=["China"]), result)
+
+
+def test_expectation_doc_type_and_version_year_require_grounded():
+    # A rejected, ungrounded answer must never satisfy doc_type/version_year on its own —
+    # retrieval having happened is not the system standing behind anything. Before this fix,
+    # this incorrectly matched because doc_type/version_year didn't check result.grounded.
+    result = _result("rejected text", grounded=False, cited_chunks=[_GLOBAL_CHUNK])
+    assert not matches(Expectation(doc_type="global_handbook", version_year=2026), result)
+
+
+def test_expectation_forbidden_matches_regardless_of_case():
+    result = _result("The APAC handbook also covers singapore.")
+    assert not matches(Expectation(forbidden=["Singapore"]), result)

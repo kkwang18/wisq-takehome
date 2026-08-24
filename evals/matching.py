@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 from src.verification import VerifiedAnswer
 
@@ -41,8 +42,6 @@ UNKNOWN_MARKERS = [
 ]
 
 HEDGE_MARKERS = ["ambig", "clarif", "which country", "specific country", "unclear", "depends on"]
-
-from dataclasses import dataclass, field
 
 
 @dataclass
@@ -125,32 +124,42 @@ def _matches_numeric_expectation(numeric: str, result: VerifiedAnswer) -> bool:
     return bool(expected_normalized & _normalize_numbers(result.text))
 
 
-def _matches_expectation(expectation: Expectation, result: VerifiedAnswer) -> bool:
-    if expectation.numeric is not None:
-        if not _matches_numeric_expectation(expectation.numeric, result):
-            return False
-    if expectation.unknown:
-        if not (result.grounded and any(marker in result.text.lower() for marker in UNKNOWN_MARKERS)):
-            return False
-    if expectation.hedge:
-        if not (result.grounded and any(word in result.text.lower() for word in HEDGE_MARKERS)):
-            return False
-    if expectation.rejected:
-        if result.grounded:
-            return False
+def _check_expectation(expectation: Expectation, result: VerifiedAnswer) -> list[str]:
+    """Every reason `expectation` fails to match `result`, one entry per failing sub-check.
+    Empty list means it matches. Single source of truth for Expectation checking —
+    _matches_expectation() and explain() are both thin wrappers around this, so a new field or
+    a fix to an existing one only needs to change one place."""
+    reasons = []
+    if expectation.numeric is not None and not _matches_numeric_expectation(expectation.numeric, result):
+        found = _normalize_numbers(result.text)
+        reasons.append(f"numeric: expected {expectation.numeric!r}, found {found or 'no numbers'}")
+    if expectation.unknown and not (result.grounded and any(m in result.text.lower() for m in UNKNOWN_MARKERS)):
+        reasons.append("unknown: expected explicit unknown wording with grounded=True")
+    if expectation.hedge and not (result.grounded and any(w in result.text.lower() for w in HEDGE_MARKERS)):
+        reasons.append("hedge: expected explicit hedge wording with grounded=True")
+    if expectation.rejected and result.grounded:
+        reasons.append("rejected: expected grounded=False")
     if expectation.doc_type is not None:
-        if not any(c.doc.doc_type == expectation.doc_type for c in result.cited_chunks):
-            return False
+        if not (result.grounded and any(c.doc.doc_type == expectation.doc_type for c in result.cited_chunks)):
+            cited = {c.doc.doc_type for c in result.cited_chunks}
+            reasons.append(f"doc_type: expected {expectation.doc_type!r}, grounded={result.grounded}, cited {cited or 'nothing'}")
     if expectation.version_year is not None:
-        if not any(c.doc.version_year == expectation.version_year for c in result.cited_chunks):
-            return False
+        if not (result.grounded and any(c.doc.version_year == expectation.version_year for c in result.cited_chunks)):
+            cited = {c.doc.version_year for c in result.cited_chunks}
+            reasons.append(f"version_year: expected {expectation.version_year!r}, grounded={result.grounded}, cited {cited or 'nothing'}")
     if expectation.required:
-        if not all(_term_boundary_matches(term, result.text) for term in expectation.required):
-            return False
+        missing = [t for t in expectation.required if not _term_boundary_matches(t, result.text)]
+        if missing:
+            reasons.append(f"required: missing {missing}")
     if expectation.forbidden and result.grounded:
-        if any(term in result.text for term in expectation.forbidden):
-            return False
-    return True
+        present = [t for t in expectation.forbidden if t.lower() in result.text.lower()]
+        if present:
+            reasons.append(f"forbidden: found {present}")
+    return reasons
+
+
+def _matches_expectation(expectation: Expectation, result: VerifiedAnswer) -> bool:
+    return not _check_expectation(expectation, result)
 
 
 def _numeric_boundary_matches(marker: str, text: str) -> bool:
@@ -198,29 +207,5 @@ def explain(expected, result: VerifiedAnswer) -> str:
     Only meaningful to call when matches(expected, result) is already False."""
     if not isinstance(expected, Expectation):
         return f"expected marker: {expected!r}"
-
-    reasons = []
-    if expected.numeric is not None and not _matches_numeric_expectation(expected.numeric, result):
-        found = _normalize_numbers(result.text)
-        reasons.append(f"numeric: expected {expected.numeric!r}, found {found or 'no numbers'}")
-    if expected.unknown and not (result.grounded and any(m in result.text.lower() for m in UNKNOWN_MARKERS)):
-        reasons.append("unknown: expected explicit unknown wording with grounded=True")
-    if expected.hedge and not (result.grounded and any(w in result.text.lower() for w in HEDGE_MARKERS)):
-        reasons.append("hedge: expected explicit hedge wording with grounded=True")
-    if expected.rejected and result.grounded:
-        reasons.append("rejected: expected grounded=False")
-    if expected.doc_type is not None and not any(c.doc.doc_type == expected.doc_type for c in result.cited_chunks):
-        cited = {c.doc.doc_type for c in result.cited_chunks}
-        reasons.append(f"doc_type: expected {expected.doc_type!r}, cited {cited or 'nothing'}")
-    if expected.version_year is not None and not any(c.doc.version_year == expected.version_year for c in result.cited_chunks):
-        cited = {c.doc.version_year for c in result.cited_chunks}
-        reasons.append(f"version_year: expected {expected.version_year!r}, cited {cited or 'nothing'}")
-    if expected.required:
-        missing = [t for t in expected.required if not _term_boundary_matches(t, result.text)]
-        if missing:
-            reasons.append(f"required: missing {missing}")
-    if expected.forbidden and result.grounded:
-        present = [t for t in expected.forbidden if t in result.text]
-        if present:
-            reasons.append(f"forbidden: found {present}")
+    reasons = _check_expectation(expected, result)
     return "; ".join(reasons) if reasons else "expectation did not match (no specific sub-check failure detected)"
